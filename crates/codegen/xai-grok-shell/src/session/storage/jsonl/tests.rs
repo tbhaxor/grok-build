@@ -2430,15 +2430,17 @@ async fn list_sessions_on_empty_store_creates_nothing() {
     let root = temp_dir.path().to_path_buf();
     let adapter = JsonlStorageAdapter::with_root(root.clone());
 
-    let before: Vec<_> = std::fs::read_dir(&root)
+    let mut before: Vec<_> = std::fs::read_dir(&root)
         .map(|d| d.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
+    before.sort();
 
     let sessions = adapter.list_sessions(None).await.expect("list failed");
 
-    let after: Vec<_> = std::fs::read_dir(&root)
+    let mut after: Vec<_> = std::fs::read_dir(&root)
         .map(|d| d.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
+    after.sort();
 
     assert!(sessions.is_empty(), "expected no sessions in empty store");
     assert_eq!(
