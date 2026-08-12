@@ -3119,6 +3119,15 @@ pub async fn list_summaries(cwd: Option<&str>) -> io::Result<Vec<Summary>> {
     storage.list_sessions(cwd).await
 }
 
+/// Read-only variant of [`list_summaries`]: scans existing sessions without
+/// running relocation recovery.  Use this on any code path that must not
+/// mutate on-disk state, such as the `grok sessions list` CLI command.
+pub async fn list_summaries_readonly(cwd: Option<&str>) -> io::Result<Vec<Summary>> {
+    let root_dir = crate::util::grok_home::grok_home();
+    let storage: Box<dyn StorageAdapter> = Box::new(JsonlStorageAdapter::with_root(root_dir));
+    storage.list_sessions(cwd).await
+}
+
 /// Failure modes of [`delete_session_history`].
 ///
 /// Kept distinct so callers can surface a precise message: a remote

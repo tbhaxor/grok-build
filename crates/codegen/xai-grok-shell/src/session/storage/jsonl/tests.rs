@@ -2422,3 +2422,27 @@ async fn explicit_session_dir_does_not_tighten_parent() {
             "caller-owned parent must not be chmod'd in Explicit mode"
         );
 }
+/// `grok sessions list` must be read-only: listing an empty store must not
+/// create any session directories or other new files on disk.
+#[tokio::test]
+async fn list_sessions_on_empty_store_creates_nothing() {
+    let temp_dir = TempDir::new().unwrap();
+    let root = temp_dir.path().to_path_buf();
+    let adapter = JsonlStorageAdapter::with_root(root.clone());
+
+    let before: Vec<_> = std::fs::read_dir(&root)
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+
+    let sessions = adapter.list_sessions(None).await.expect("list failed");
+
+    let after: Vec<_> = std::fs::read_dir(&root)
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+
+    assert!(sessions.is_empty(), "expected no sessions in empty store");
+    assert_eq!(
+        before, after,
+        "list_sessions must not create any files or directories"
+    );
+}

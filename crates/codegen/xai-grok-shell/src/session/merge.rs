@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::agent::session_registry_client::{SessionRecord, SessionRegistryClient};
-use crate::session::persistence::{Summary, list_summaries};
+use crate::session::persistence::{Summary, list_summaries_readonly};
 use xai_grok_workspace::session::git::normalize_repo_url;
 
 pub const REMOTE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -170,12 +170,12 @@ pub(crate) async fn fetch_lanes(
         let mut all = Vec::new();
         if cwds.is_empty() {
             // No CWD or worktree lookup failed — list all
-            if let Ok(v) = list_summaries(cwd_owned.as_deref()).await {
+            if let Ok(v) = list_summaries_readonly(cwd_owned.as_deref()).await {
                 all.extend(v);
             }
         } else {
             for c in &cwds {
-                if let Ok(v) = list_summaries(Some(c)).await {
+                if let Ok(v) = list_summaries_readonly(Some(c)).await {
                     all.extend(v);
                 }
             }
