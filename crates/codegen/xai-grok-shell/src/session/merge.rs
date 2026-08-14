@@ -6,7 +6,7 @@
 //! (`last_active_at` falling back to `updated_at`) descending.
 
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -377,8 +377,8 @@ pub fn merge(
     // an unparseable timestamp sort to the bottom; equal times tie-break on
     // `session_id` ascending.
     merged.sort_by_cached_key(|s| (Reverse(effective_sort_time(s)), s.session_id.clone()));
-    // Dedup empty sessions BEFORE truncating so the final list has `limit` entries.
-    dedup_empty_sessions(&mut merged);
+    // Drop never-used placeholders before truncating so `limit` is real sessions.
+    drop_empty_placeholder_sessions(&mut merged);
     merged.truncate(limit);
     merged
 }
@@ -398,30 +398,22 @@ fn effective_sort_time(s: &MergedSession) -> Option<chrono::DateTime<chrono::Fix
         .or_else(|| chrono::DateTime::parse_from_rfc3339(&s.updated_at).ok())
 }
 
-/// For each cwd, keep only the most recent session with 0 messages.
-/// Relies on the caller having already sorted newest-first (see `merge`): the
-/// first empty session seen per cwd is retained and later (older) ones dropped.
-fn dedup_empty_sessions(sessions: &mut Vec<MergedSession>) {
-    let mut seen_empty_cwds: HashSet<String> = HashSet::new();
-    sessions.retain(|s| {
-        if s.num_messages == 0 {
-            let key = normalize_cwd(&s.cwd);
-            seen_empty_cwds.insert(key)
-        } else {
-            true
-        }
-    });
+/// Drop unused placeholder sessions: 0 messages, no title, no first prompt.
+///
+/// A TUI launch persists a blank `summary.json` immediately (`init_session`).
+/// Listing used to keep one such row per cwd (`dedup_empty_sessions`), so
+/// `grok sessions list` always showed a "(no summary)" entry, and deleting it
+/// unmasked the next leftover — looking like list had created a new session.
+fn drop_empty_placeholder_sessions(sessions: &mut Vec<MergedSession>) {
+    sessions.retain(|s| !is_empty_placeholder(s));
 }
 
-/// Normalize a cwd string for dedup comparison.
-/// Strips trailing slashes and resolves `/./` sequences.
-fn normalize_cwd(cwd: &str) -> String {
-    let trimmed = cwd.trim_end_matches('/');
-    if trimmed.is_empty() {
-        "/".to_owned()
-    } else {
-        trimmed.replace("/./", "/")
-    }
+fn is_empty_placeholder(s: &MergedSession) -> bool {
+    s.num_messages == 0
+        && s.summary.trim().is_empty()
+        && s.first_prompt
+            .as_deref()
+            .is_none_or(|prompt| prompt.trim().is_empty())
 }
 
 /// Convert a `MergedSession` to a `SessionRecord` for CLI display compatibility.
@@ -560,9 +552,9 @@ mod tests {
     fn stale_remote_turn_counter_does_not_demote_local_sessions_to_empty() {
         // The registry's last_turn_number is updated fire-and-forget and can
         // stay at 0 for sessions with real local turns. The merged row must
-        // keep the local num_messages, or dedup_empty_sessions collapses every
-        // such same-cwd session into a single "empty draft" row — hiding real
-        // sessions (and their unread indicators) from every list surface.
+        // keep the local num_messages, or drop_empty_placeholder_sessions
+        // would treat every such same-cwd session as an unused draft and
+        // hide the real sessions (and their unread indicators).
         let local = vec![
             make_summary("s1", "first real session", "2026-03-01T00:00:00Z"),
             make_summary("s2", "second real session", "2026-03-01T01:00:00Z"),
@@ -1254,7 +1246,7 @@ mod tests {
         assert_eq!(merged[0].summary, "Kubernetes deployment fix");
     }
 
-    // ── dedup_empty_sessions tests ──────────────────────────────────────
+    // ── empty placeholder session tests ─────────────────────────────────
 
     fn make_merged(id: &str, cwd: &str, updated: &str, num_messages: usize) -> MergedSession {
         MergedSession {
@@ -1280,71 +1272,111 @@ mod tests {
         }
     }
 
+    fn make_empty_summary(id: &str, updated: &str) -> Summary {
+        Summary {
+            num_messages: 0,
+            session_summary: String::new(),
+            generated_title: None,
+            ..make_summary(id, "", updated)
+        }
+    }
+
     #[test]
-    fn dedup_empty_same_cwd_keeps_newest() {
+    fn empty_placeholders_are_dropped_from_the_list() {
         let mut sessions = vec![
             make_merged("newest", "/repo", "2026-04-01T00:00:00Z", 0),
             make_merged("middle", "/repo", "2026-03-01T00:00:00Z", 0),
             make_merged("oldest", "/repo", "2026-02-01T00:00:00Z", 0),
         ];
-        dedup_empty_sessions(&mut sessions);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].session_id, "newest");
+        drop_empty_placeholder_sessions(&mut sessions);
+        assert!(sessions.is_empty());
     }
 
     #[test]
-    fn dedup_empty_preserves_nonempty_same_cwd() {
+    fn empty_placeholders_do_not_hide_real_sessions() {
         let mut sessions = vec![
             make_merged("nonempty", "/repo", "2026-04-01T00:00:00Z", 5),
             make_merged("empty", "/repo", "2026-03-01T00:00:00Z", 0),
         ];
-        dedup_empty_sessions(&mut sessions);
-        assert_eq!(sessions.len(), 2);
-        assert!(sessions.iter().any(|s| s.session_id == "nonempty"));
-        assert!(sessions.iter().any(|s| s.session_id == "empty"));
+        drop_empty_placeholder_sessions(&mut sessions);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "nonempty");
     }
 
     #[test]
-    fn dedup_empty_different_cwds_keeps_both() {
+    fn titled_empty_sessions_are_kept() {
+        let mut titled = make_merged("titled", "/repo", "2026-04-01T00:00:00Z", 0);
+        titled.summary = "Saved draft".into();
         let mut sessions = vec![
-            make_merged("e1", "/repo-a", "2026-04-01T00:00:00Z", 0),
-            make_merged("e2", "/repo-b", "2026-03-01T00:00:00Z", 0),
+            titled,
+            make_merged("blank", "/repo", "2026-03-01T00:00:00Z", 0),
         ];
-        dedup_empty_sessions(&mut sessions);
-        assert_eq!(sessions.len(), 2);
+        drop_empty_placeholder_sessions(&mut sessions);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "titled");
     }
 
     #[test]
-    fn dedup_empty_noop_on_empty_input() {
+    fn empty_session_with_first_prompt_is_kept() {
+        let mut prompted = make_merged("prompted", "/repo", "2026-04-01T00:00:00Z", 0);
+        prompted.first_prompt = Some("fix the parser".into());
+        let mut sessions = vec![prompted];
+        drop_empty_placeholder_sessions(&mut sessions);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "prompted");
+    }
+
+    #[test]
+    fn drop_empty_noop_on_empty_input() {
         let mut v = vec![];
-        dedup_empty_sessions(&mut v);
+        drop_empty_placeholder_sessions(&mut v);
         assert!(v.is_empty());
     }
 
     #[test]
-    fn dedup_empty_multi_cwd_mixed() {
-        // 2 cwds, each with 2 empty + 1 non-empty session.
+    fn merge_hides_unused_placeholders_so_delete_does_not_unmask_another() {
+        // Reproduces `grok sessions list` → delete the "(no summary)" row →
+        // list again. Previously `dedup_empty_sessions` kept one empty per
+        // cwd, so the next leftover appeared as a newly created session.
+        let local = vec![
+            make_empty_summary("empty-new", "2026-04-01T00:00:00Z"),
+            make_empty_summary("empty-old", "2026-03-01T00:00:00Z"),
+            make_summary("real", "real work", "2026-02-01T00:00:00Z"),
+        ];
+        let merged = merge(Vec::new(), local, None, &[], 20);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].session_id, "real");
+
+        let after_delete = merge(
+            Vec::new(),
+            vec![
+                make_empty_summary("empty-old", "2026-03-01T00:00:00Z"),
+                make_summary("real", "real work", "2026-02-01T00:00:00Z"),
+            ],
+            None,
+            &[],
+            20,
+        );
+        assert_eq!(after_delete.len(), 1);
+        assert_eq!(after_delete[0].session_id, "real");
+        assert!(!after_delete.iter().any(|s| s.summary.is_empty()));
+    }
+
+    #[test]
+    fn drop_empty_multi_cwd_mixed() {
         let mut sessions = vec![
-            // /repo-a: non-empty (newest), empty, empty
             make_merged("a-nonempty", "/repo-a", "2026-04-03T00:00:00Z", 3),
             make_merged("a-empty1", "/repo-a", "2026-04-02T00:00:00Z", 0),
             make_merged("a-empty2", "/repo-a", "2026-04-01T00:00:00Z", 0),
-            // /repo-b: empty (newest), non-empty, empty
             make_merged("b-empty1", "/repo-b", "2026-03-03T00:00:00Z", 0),
             make_merged("b-nonempty", "/repo-b", "2026-03-02T00:00:00Z", 7),
             make_merged("b-empty2", "/repo-b", "2026-03-01T00:00:00Z", 0),
         ];
-        dedup_empty_sessions(&mut sessions);
-        // Non-empty sessions always survive.
+        drop_empty_placeholder_sessions(&mut sessions);
         assert!(sessions.iter().any(|s| s.session_id == "a-nonempty"));
         assert!(sessions.iter().any(|s| s.session_id == "b-nonempty"));
-        // Exactly 1 empty per cwd survives (the first/newest one).
-        assert!(sessions.iter().any(|s| s.session_id == "a-empty1"));
-        assert!(sessions.iter().any(|s| s.session_id == "b-empty1"));
-        // The older duplicate empties are removed.
-        assert!(!sessions.iter().any(|s| s.session_id == "a-empty2"));
-        assert!(!sessions.iter().any(|s| s.session_id == "b-empty2"));
-        assert_eq!(sessions.len(), 4);
+        assert!(!sessions.iter().any(|s| s.num_messages == 0));
+        assert_eq!(sessions.len(), 2);
     }
 
     // ── limit applied after merge tests ─────────────────────────────────
