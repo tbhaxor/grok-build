@@ -31,6 +31,18 @@ enum SessionsCommand {
         /// Session id to delete.
         id: String,
     },
+    /// Delete unused empty sessions (0 turns) from local disk and remote
+    Prune {
+        /// Delete every session, including ones that have turns.
+        #[arg(long)]
+        all: bool,
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        force: bool,
+        /// Print matching sessions without deleting them.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub async fn run(args: SessionsArgs, agent_config: &AgentConfig) -> Result<()> {
@@ -207,9 +219,101 @@ pub async fn run(args: SessionsArgs, agent_config: &AgentConfig) -> Result<()> {
                 println!("No session found with id {id}.");
             }
         }
+        SessionsCommand::Prune {
+            all,
+            force,
+            dry_run,
+        } => {
+            let needs_remote = auth.as_ref().is_some_and(|a| !a.is_zdr_team());
+            let targets = xai_grok_shell::session::merge::fetch_sessions_for_prune(
+                Some(&client),
+                cwd.to_str(),
+                xai_grok_shell::session::merge::CwdScope::WithSiblings,
+                !all,
+            )
+            .await;
+            prune_sessions(targets, all, force, dry_run, needs_remote, auth_manager).await?;
+        }
     }
 
     Ok(())
+}
+
+async fn prune_sessions(
+    targets: Vec<MergedSession>,
+    all: bool,
+    force: bool,
+    dry_run: bool,
+    needs_remote: bool,
+    auth_manager: std::sync::Arc<AuthManager>,
+) -> Result<()> {
+    let kind = if all {
+        "session(s)"
+    } else {
+        "empty session(s)"
+    };
+    if targets.is_empty() {
+        println!("No {kind} to prune.");
+        return Ok(());
+    }
+    print_prune_targets(&targets);
+    if dry_run {
+        println!("Would prune {} {kind}.", targets.len());
+        return Ok(());
+    }
+    if !force && !confirm_prune(targets.len(), kind)? {
+        println!("Aborted.");
+        return Ok(());
+    }
+    let mut deleted = 0usize;
+    for s in &targets {
+        let deletion = xai_grok_shell::session::persistence::delete_session_history(
+            &s.session_id,
+            None,
+            needs_remote,
+            auth_manager.clone(),
+            None,
+        )
+        .await?;
+        if deletion.any_removed() {
+            println!("Deleted session {}", s.session_id);
+            deleted += 1;
+        }
+    }
+    println!("Pruned {deleted} {kind}.");
+    Ok(())
+}
+
+fn session_display_name(s: &MergedSession) -> String {
+    if !s.summary.is_empty() {
+        return s.summary.chars().take(50).collect();
+    }
+    if let Some(ref fp) = s.first_prompt
+        && let Some(line) = fp.lines().find(|l| !l.trim().is_empty())
+    {
+        return line.trim().chars().take(50).collect();
+    }
+    "(no summary)".to_string()
+}
+
+fn print_prune_targets(sessions: &[MergedSession]) {
+    println!("{:<36}  {}", "SESSION ID", "NAME");
+    for s in sessions {
+        println!("{}  {}", s.session_id, session_display_name(s));
+    }
+}
+
+fn confirm_yes(answer: &str) -> bool {
+    matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+fn confirm_prune(count: usize, kind: &str) -> Result<bool> {
+    eprint!("Delete {count} {kind}? [y/N] ");
+    use std::io::{self, Write};
+    io::stderr().flush()?;
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    Ok(confirm_yes(&line))
 }
 
 /// Print sessions grouped by worktree label, preserving the original table
@@ -268,5 +372,77 @@ fn print_sessions_grouped(sessions: &[MergedSession]) {
     }
     if let Some(members) = &none_group {
         print_group("(no label)", members);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    struct Wrap {
+        #[command(subcommand)]
+        command: SessionsCommand,
+    }
+
+    fn merged(id: &str, summary: &str, first_prompt: Option<&str>) -> MergedSession {
+        MergedSession {
+            session_id: id.into(),
+            summary: summary.into(),
+            first_prompt: first_prompt.map(str::to_owned),
+            ..MergedSession::default()
+        }
+    }
+
+    #[test]
+    fn prune_parses_defaults() {
+        let wrap = Wrap::try_parse_from(["sessions", "prune"]).unwrap();
+        assert!(matches!(
+            wrap.command,
+            SessionsCommand::Prune {
+                all: false,
+                force: false,
+                dry_run: false
+            }
+        ));
+    }
+
+    #[test]
+    fn prune_parses_all_force_and_dry_run() {
+        let wrap =
+            Wrap::try_parse_from(["sessions", "prune", "--all", "--force", "--dry-run"]).unwrap();
+        assert!(matches!(
+            wrap.command,
+            SessionsCommand::Prune {
+                all: true,
+                force: true,
+                dry_run: true
+            }
+        ));
+    }
+
+    #[test]
+    fn confirm_yes_accepts_y_and_yes() {
+        assert!(confirm_yes("y"));
+        assert!(confirm_yes("Y"));
+        assert!(confirm_yes(" yes \n"));
+        assert!(!confirm_yes(""));
+        assert!(!confirm_yes("n"));
+        assert!(!confirm_yes("no"));
+        assert!(!confirm_yes("maybe"));
+    }
+
+    #[test]
+    fn session_display_name_prefers_summary_then_prompt() {
+        assert_eq!(
+            session_display_name(&merged("a", "Fix the parser", None)),
+            "Fix the parser"
+        );
+        assert_eq!(
+            session_display_name(&merged("b", "", Some("first line\nmore"))),
+            "first line"
+        );
+        assert_eq!(session_display_name(&merged("c", "", None)), "(no summary)");
     }
 }

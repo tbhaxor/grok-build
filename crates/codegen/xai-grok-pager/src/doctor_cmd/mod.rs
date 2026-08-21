@@ -61,7 +61,7 @@ fn run_report(json_output: bool, writer: &mut impl Write) -> Result<()> {
 
 pub fn collect_report() -> DiagnosticReport {
     let terminal = crate::terminal::standalone_terminal_context();
-    let report = collect_report_with(crate::diagnostics::probes::collect_standalone(&terminal));
+    let report = live_report_from(crate::diagnostics::probes::collect_standalone(&terminal));
     configured_report_for_terminal(report, &terminal)
 }
 
@@ -78,12 +78,21 @@ fn configured_report_for_terminal(
     crate::diagnostics::configured_report(report, configured)
 }
 
+/// Compose a report from a snapshot, then run the live voice probe.
+/// Used by real `grok doctor` / `doctor fix` paths only — tests that feed
+/// fake snapshots must not pick up the host microphone.
+fn live_report_from(
+    snapshot: crate::diagnostics::probes::StandaloneDiagnosticSnapshot<'_>,
+) -> DiagnosticReport {
+    let mut report = collect_report_with(snapshot);
+    crate::diagnostics::apply_voice_probe(&mut report, true);
+    report
+}
+
 fn collect_report_with(
     snapshot: crate::diagnostics::probes::StandaloneDiagnosticSnapshot<'_>,
 ) -> DiagnosticReport {
-    let mut report = crate::diagnostics::view(snapshot.into());
-    crate::diagnostics::apply_voice_probe(&mut report, true);
-    report
+    crate::diagnostics::view(snapshot.into())
 }
 
 fn write_report(
@@ -108,7 +117,7 @@ fn run_fix(
     let terminal = crate::terminal::standalone_terminal_context();
     let Some(value) = args.id.as_deref() else {
         let report = configured_report_for_terminal(
-            collect_report_with(crate::diagnostics::probes::collect_standalone_fix(
+            live_report_from(crate::diagnostics::probes::collect_standalone_fix(
                 &terminal, None,
             )),
             &terminal,
@@ -122,7 +131,7 @@ fn run_fix(
     };
     let id = crate::diagnostics::resolve_fix_id(value)?;
     let report = configured_report_for_terminal(
-        collect_report_with(crate::diagnostics::probes::collect_standalone_fix(
+        live_report_from(crate::diagnostics::probes::collect_standalone_fix(
             &terminal,
             Some(id),
         )),
@@ -164,7 +173,7 @@ fn apply_fix_plan(
         // Use the shell stored on the outcome (from planning), not `$SHELL`.
         // `$SHELL` may be missing or no longer match the shell the plan targeted.
         let post_report = crate::diagnostics::configured_report(
-            collect_report_with(crate::diagnostics::probes::collect_standalone(terminal)),
+            live_report_from(crate::diagnostics::probes::collect_standalone(terminal)),
             outcome.managed_alias_is_configured(),
         );
         if post_report

@@ -52,7 +52,8 @@ pub enum Command {
     Memory(crate::memory_cmd::MemoryArgs),
     /// List available models and exit
     Models,
-    /// List, search, or restore sessions
+    /// List, search, prune, or restore sessions
+    #[command(visible_alias = "session")]
     Sessions(crate::sessions_cmd::SessionsArgs),
     /// Fetch and install managed configuration
     Setup {
@@ -1379,6 +1380,22 @@ mod tests {
             }))
         ));
         assert!(PagerArgs::try_parse_from(["grok", "leader", "profile"]).is_err());
+    }
+    #[test]
+    fn session_alias_parses_sessions_prune() {
+        let via_alias =
+            PagerArgs::try_parse_from(["grok", "session", "prune"]).expect("grok session prune");
+        assert!(matches!(via_alias.command, Some(Command::Sessions(_))));
+        let via_name = PagerArgs::try_parse_from([
+            "grok",
+            "sessions",
+            "prune",
+            "--all",
+            "--force",
+            "--dry-run",
+        ])
+        .expect("grok sessions prune --all --force --dry-run");
+        assert!(matches!(via_name.command, Some(Command::Sessions(_))));
     }
     #[test]
     fn debug_file_flag_parses_and_is_global() {

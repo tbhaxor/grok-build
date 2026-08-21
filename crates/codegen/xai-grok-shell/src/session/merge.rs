@@ -6,7 +6,7 @@
 //! (`last_active_at` falling back to `updated_at`) descending.
 
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -121,6 +121,24 @@ pub async fn fetch_merged(
         repo_urls,
     } = fetch_lanes(client, cwd, scope, query, limit).await;
     merge(remote, local, query, &repo_urls, limit)
+}
+
+/// Sessions `grok sessions prune` will delete.
+///
+/// `empty_only` keeps zero-turn leftovers (the default). When false (`--all`),
+/// every merged session is returned, including ones with turns.
+pub async fn fetch_sessions_for_prune(
+    client: Option<&SessionRegistryClient>,
+    cwd: Option<&str>,
+    scope: CwdScope,
+    empty_only: bool,
+) -> Vec<MergedSession> {
+    let SessionLanes {
+        local,
+        remote,
+        repo_urls,
+    } = fetch_lanes(client, cwd, scope, None, 10_000).await;
+    sessions_to_prune(remote, local, &repo_urls, empty_only)
 }
 
 /// Retain summaries matching `repo_urls`; empty `repo_urls` leaves them unfiltered.
@@ -266,6 +284,53 @@ pub fn merge(
     local_repo_urls: &[String],
     limit: usize,
 ) -> Vec<MergedSession> {
+    let mut merged = assemble_merged(remote, local, query, local_repo_urls);
+    // Drop zero-turn leftovers before truncating so `limit` is real sessions.
+    drop_empty_sessions(&mut merged);
+    merged.truncate(limit);
+    merged
+}
+
+/// A session with no turns: leftover from a TUI open that never received a
+/// user prompt. List hides these; `grok sessions prune` deletes them.
+pub fn is_empty_session(s: &MergedSession) -> bool {
+    s.num_messages == 0
+}
+
+/// Zero-turn sessions from a raw local+remote merge (no list-side hide).
+pub fn empty_sessions_to_prune(
+    remote: Vec<SessionRecord>,
+    local: Vec<Summary>,
+    local_repo_urls: &[String],
+) -> Vec<MergedSession> {
+    sessions_to_prune(remote, local, local_repo_urls, true)
+}
+
+/// Candidates for prune. `empty_only` is the default filter; `--all` passes
+/// `false` so sessions with turns are included.
+pub fn sessions_to_prune(
+    remote: Vec<SessionRecord>,
+    local: Vec<Summary>,
+    local_repo_urls: &[String],
+    empty_only: bool,
+) -> Vec<MergedSession> {
+    let mut merged = assemble_merged(remote, local, None, local_repo_urls);
+    if empty_only {
+        merged.retain(is_empty_session);
+    }
+    merged
+}
+
+fn drop_empty_sessions(sessions: &mut Vec<MergedSession>) {
+    sessions.retain(|s| !is_empty_session(s));
+}
+
+fn assemble_merged(
+    remote: Vec<SessionRecord>,
+    local: Vec<Summary>,
+    query: Option<&str>,
+    local_repo_urls: &[String],
+) -> Vec<MergedSession> {
     let mut by_id: HashMap<String, MergedSession> =
         HashMap::with_capacity(remote.len() + local.len());
 
@@ -376,6 +441,10 @@ pub fn merge(
         );
     }
 
+    finish_merge(by_id)
+}
+
+fn finish_merge(by_id: HashMap<String, MergedSession>) -> Vec<MergedSession> {
     let mut merged: Vec<MergedSession> = by_id.into_values().collect();
     // Sort newest-first by the same key the picker UI shows, so the visible
     // "time ago" column is monotonic with the list order. `sort_by_cached_key`
@@ -383,9 +452,6 @@ pub fn merge(
     // an unparseable timestamp sort to the bottom; equal times tie-break on
     // `session_id` ascending.
     merged.sort_by_cached_key(|s| (Reverse(effective_sort_time(s)), s.session_id.clone()));
-    // Dedup empty sessions BEFORE truncating so the final list has `limit` entries.
-    dedup_empty_sessions(&mut merged);
-    merged.truncate(limit);
     merged
 }
 
@@ -402,32 +468,6 @@ fn effective_sort_time(s: &MergedSession) -> Option<chrono::DateTime<chrono::Fix
         .as_deref()
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .or_else(|| chrono::DateTime::parse_from_rfc3339(&s.updated_at).ok())
-}
-
-/// For each cwd, keep only the most recent session with 0 messages.
-/// Relies on the caller having already sorted newest-first (see `merge`): the
-/// first empty session seen per cwd is retained and later (older) ones dropped.
-fn dedup_empty_sessions(sessions: &mut Vec<MergedSession>) {
-    let mut seen_empty_cwds: HashSet<String> = HashSet::new();
-    sessions.retain(|s| {
-        if s.num_messages == 0 {
-            let key = normalize_cwd(&s.cwd);
-            seen_empty_cwds.insert(key)
-        } else {
-            true
-        }
-    });
-}
-
-/// Normalize a cwd string for dedup comparison.
-/// Strips trailing slashes and resolves `/./` sequences.
-fn normalize_cwd(cwd: &str) -> String {
-    let trimmed = cwd.trim_end_matches('/');
-    if trimmed.is_empty() {
-        "/".to_owned()
-    } else {
-        trimmed.replace("/./", "/")
-    }
 }
 
 /// Convert a `MergedSession` to a `SessionRecord` for CLI display compatibility.
@@ -567,8 +607,8 @@ mod tests {
     fn stale_remote_turn_counter_does_not_demote_local_sessions_to_empty() {
         // The registry's last_turn_number is updated fire-and-forget and can
         // stay at 0 for sessions with real local turns. The merged row must
-        // keep the local num_messages, or dedup_empty_sessions collapses every
-        // such same-cwd session into a single "empty draft" row — hiding real
+        // keep the local num_messages, or drop_empty_sessions would treat
+        // every such same-cwd session as an unused draft and hide the real
         // sessions (and their unread indicators) from every list surface.
         let local = vec![
             make_summary("s1", "first real session", "2026-03-01T00:00:00Z"),
@@ -1284,7 +1324,7 @@ mod tests {
         assert_eq!(merged[0].summary, "Kubernetes deployment fix");
     }
 
-    // ── dedup_empty_sessions tests ──────────────────────────────────────
+    // ── empty / prune session tests ─────────────────────────────────────
 
     fn make_merged(id: &str, cwd: &str, updated: &str, num_messages: usize) -> MergedSession {
         MergedSession {
@@ -1311,71 +1351,122 @@ mod tests {
         }
     }
 
+    fn make_empty_summary(id: &str, updated: &str) -> Summary {
+        Summary {
+            num_messages: 0,
+            session_summary: String::new(),
+            generated_title: None,
+            ..make_summary(id, "", updated)
+        }
+    }
+
     #[test]
-    fn dedup_empty_same_cwd_keeps_newest() {
+    fn empty_sessions_are_dropped_from_the_list() {
         let mut sessions = vec![
             make_merged("newest", "/repo", "2026-04-01T00:00:00Z", 0),
             make_merged("middle", "/repo", "2026-03-01T00:00:00Z", 0),
             make_merged("oldest", "/repo", "2026-02-01T00:00:00Z", 0),
         ];
-        dedup_empty_sessions(&mut sessions);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].session_id, "newest");
+        drop_empty_sessions(&mut sessions);
+        assert!(sessions.is_empty());
     }
 
     #[test]
-    fn dedup_empty_preserves_nonempty_same_cwd() {
+    fn empty_sessions_do_not_hide_real_sessions() {
         let mut sessions = vec![
             make_merged("nonempty", "/repo", "2026-04-01T00:00:00Z", 5),
             make_merged("empty", "/repo", "2026-03-01T00:00:00Z", 0),
         ];
-        dedup_empty_sessions(&mut sessions);
-        assert_eq!(sessions.len(), 2);
-        assert!(sessions.iter().any(|s| s.session_id == "nonempty"));
-        assert!(sessions.iter().any(|s| s.session_id == "empty"));
+        drop_empty_sessions(&mut sessions);
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].session_id, "nonempty");
     }
 
     #[test]
-    fn dedup_empty_different_cwds_keeps_both() {
-        let mut sessions = vec![
-            make_merged("e1", "/repo-a", "2026-04-01T00:00:00Z", 0),
-            make_merged("e2", "/repo-b", "2026-03-01T00:00:00Z", 0),
-        ];
-        dedup_empty_sessions(&mut sessions);
-        assert_eq!(sessions.len(), 2);
+    fn zero_turns_is_empty_even_with_a_title() {
+        let mut titled = make_merged("titled", "/repo", "2026-04-01T00:00:00Z", 0);
+        titled.summary = "Saved draft".into();
+        assert!(is_empty_session(&titled));
     }
 
     #[test]
-    fn dedup_empty_noop_on_empty_input() {
+    fn drop_empty_noop_on_empty_input() {
         let mut v = vec![];
-        dedup_empty_sessions(&mut v);
+        drop_empty_sessions(&mut v);
         assert!(v.is_empty());
     }
 
     #[test]
-    fn dedup_empty_multi_cwd_mixed() {
-        // 2 cwds, each with 2 empty + 1 non-empty session.
+    fn merge_hides_zero_turn_sessions() {
+        let local = vec![
+            make_empty_summary("empty-new", "2026-04-01T00:00:00Z"),
+            make_empty_summary("empty-old", "2026-03-01T00:00:00Z"),
+            make_summary("real", "real work", "2026-02-01T00:00:00Z"),
+        ];
+        let merged = merge(Vec::new(), local, None, &[], 20);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].session_id, "real");
+    }
+
+    #[test]
+    fn prune_selects_every_zero_turn_session() {
+        let local = vec![
+            make_empty_summary("empty-new", "2026-04-01T00:00:00Z"),
+            make_empty_summary("empty-old", "2026-03-01T00:00:00Z"),
+            make_summary("real", "real work", "2026-02-01T00:00:00Z"),
+        ];
+        let mut empty = empty_sessions_to_prune(Vec::new(), local, &[]);
+        empty.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        let ids: Vec<&str> = empty.iter().map(|s| s.session_id.as_str()).collect();
+        assert_eq!(ids, ["empty-new", "empty-old"]);
+    }
+
+    #[test]
+    fn prune_selects_remote_only_zero_turn_sessions() {
+        let remote = vec![SessionRecord {
+            last_turn_number: 0,
+            ..make_remote("remote-empty", "", "2026-04-01T00:00:00Z")
+        }];
+        let empty = empty_sessions_to_prune(remote, Vec::new(), &[]);
+        assert_eq!(empty.len(), 1);
+        assert_eq!(empty[0].session_id, "remote-empty");
+        assert_eq!(empty[0].source, "remote");
+    }
+
+    #[test]
+    fn prune_skips_remote_sessions_that_have_turns() {
+        let remote = vec![make_remote("remote-real", "titled", "2026-04-01T00:00:00Z")];
+        let empty = empty_sessions_to_prune(remote, Vec::new(), &[]);
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn prune_all_includes_sessions_with_turns() {
+        let local = vec![
+            make_empty_summary("empty", "2026-04-01T00:00:00Z"),
+            make_summary("real", "real work", "2026-02-01T00:00:00Z"),
+        ];
+        let all = sessions_to_prune(Vec::new(), local, &[], false);
+        let mut ids: Vec<&str> = all.iter().map(|s| s.session_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["empty", "real"]);
+    }
+
+    #[test]
+    fn drop_empty_multi_cwd_mixed() {
         let mut sessions = vec![
-            // /repo-a: non-empty (newest), empty, empty
             make_merged("a-nonempty", "/repo-a", "2026-04-03T00:00:00Z", 3),
             make_merged("a-empty1", "/repo-a", "2026-04-02T00:00:00Z", 0),
             make_merged("a-empty2", "/repo-a", "2026-04-01T00:00:00Z", 0),
-            // /repo-b: empty (newest), non-empty, empty
             make_merged("b-empty1", "/repo-b", "2026-03-03T00:00:00Z", 0),
             make_merged("b-nonempty", "/repo-b", "2026-03-02T00:00:00Z", 7),
             make_merged("b-empty2", "/repo-b", "2026-03-01T00:00:00Z", 0),
         ];
-        dedup_empty_sessions(&mut sessions);
-        // Non-empty sessions always survive.
+        drop_empty_sessions(&mut sessions);
         assert!(sessions.iter().any(|s| s.session_id == "a-nonempty"));
         assert!(sessions.iter().any(|s| s.session_id == "b-nonempty"));
-        // Exactly 1 empty per cwd survives (the first/newest one).
-        assert!(sessions.iter().any(|s| s.session_id == "a-empty1"));
-        assert!(sessions.iter().any(|s| s.session_id == "b-empty1"));
-        // The older duplicate empties are removed.
-        assert!(!sessions.iter().any(|s| s.session_id == "a-empty2"));
-        assert!(!sessions.iter().any(|s| s.session_id == "b-empty2"));
-        assert_eq!(sessions.len(), 4);
+        assert!(!sessions.iter().any(is_empty_session));
+        assert_eq!(sessions.len(), 2);
     }
 
     // ── limit applied after merge tests ─────────────────────────────────

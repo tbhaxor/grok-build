@@ -478,6 +478,7 @@ mod tests {
 
     #[test]
     fn run_job_succeeds_on_temp_file() {
+        let _theme = crate::theme::cache::pin_theme();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("probe.py");
         let body = "x = 1\ny = 2\n";
@@ -492,7 +493,7 @@ mod tests {
         match run_job(&job) {
             EditHlOutcome::Ready { by_new_line, theme } => {
                 assert!(by_new_line.contains_key(&1));
-                assert_eq!(theme, crate::theme::cache::current_kind());
+                assert_eq!(theme, crate::theme::ThemeKind::GrokNight);
             }
             EditHlOutcome::Failed => panic!("expected Ready for temp python file"),
         }
