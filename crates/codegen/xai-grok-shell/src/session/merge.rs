@@ -285,14 +285,12 @@ pub fn merge(
     limit: usize,
 ) -> Vec<MergedSession> {
     let mut merged = assemble_merged(remote, local, query, local_repo_urls);
-    // Drop zero-turn leftovers before truncating so `limit` is real sessions.
-    drop_empty_sessions(&mut merged);
     merged.truncate(limit);
     merged
 }
 
 /// A session with no turns: leftover from a TUI open that never received a
-/// user prompt. List hides these; `grok sessions prune` deletes them.
+/// user prompt. `grok sessions prune` deletes these; list still shows them.
 pub fn is_empty_session(s: &MergedSession) -> bool {
     s.num_messages == 0
 }
@@ -319,10 +317,6 @@ pub fn sessions_to_prune(
         merged.retain(is_empty_session);
     }
     merged
-}
-
-fn drop_empty_sessions(sessions: &mut Vec<MergedSession>) {
-    sessions.retain(|s| !is_empty_session(s));
 }
 
 fn assemble_merged(
@@ -607,9 +601,8 @@ mod tests {
     fn stale_remote_turn_counter_does_not_demote_local_sessions_to_empty() {
         // The registry's last_turn_number is updated fire-and-forget and can
         // stay at 0 for sessions with real local turns. The merged row must
-        // keep the local num_messages, or drop_empty_sessions would treat
-        // every such same-cwd session as an unused draft and hide the real
-        // sessions (and their unread indicators) from every list surface.
+        // keep the local num_messages, or prune would treat every such
+        // same-cwd session as an unused draft.
         let local = vec![
             make_summary("s1", "first real session", "2026-03-01T00:00:00Z"),
             make_summary("s2", "second real session", "2026-03-01T01:00:00Z"),
@@ -1361,28 +1354,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_sessions_are_dropped_from_the_list() {
-        let mut sessions = vec![
-            make_merged("newest", "/repo", "2026-04-01T00:00:00Z", 0),
-            make_merged("middle", "/repo", "2026-03-01T00:00:00Z", 0),
-            make_merged("oldest", "/repo", "2026-02-01T00:00:00Z", 0),
-        ];
-        drop_empty_sessions(&mut sessions);
-        assert!(sessions.is_empty());
-    }
-
-    #[test]
-    fn empty_sessions_do_not_hide_real_sessions() {
-        let mut sessions = vec![
-            make_merged("nonempty", "/repo", "2026-04-01T00:00:00Z", 5),
-            make_merged("empty", "/repo", "2026-03-01T00:00:00Z", 0),
-        ];
-        drop_empty_sessions(&mut sessions);
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0].session_id, "nonempty");
-    }
-
-    #[test]
     fn zero_turns_is_empty_even_with_a_title() {
         let mut titled = make_merged("titled", "/repo", "2026-04-01T00:00:00Z", 0);
         titled.summary = "Saved draft".into();
@@ -1390,22 +1361,16 @@ mod tests {
     }
 
     #[test]
-    fn drop_empty_noop_on_empty_input() {
-        let mut v = vec![];
-        drop_empty_sessions(&mut v);
-        assert!(v.is_empty());
-    }
-
-    #[test]
-    fn merge_hides_zero_turn_sessions() {
+    fn merge_keeps_zero_turn_sessions() {
         let local = vec![
             make_empty_summary("empty-new", "2026-04-01T00:00:00Z"),
             make_empty_summary("empty-old", "2026-03-01T00:00:00Z"),
             make_summary("real", "real work", "2026-02-01T00:00:00Z"),
         ];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].session_id, "real");
+        let mut ids: Vec<&str> = merged.iter().map(|s| s.session_id.as_str()).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["empty-new", "empty-old", "real"]);
     }
 
     #[test]
@@ -1450,23 +1415,6 @@ mod tests {
         let mut ids: Vec<&str> = all.iter().map(|s| s.session_id.as_str()).collect();
         ids.sort_unstable();
         assert_eq!(ids, ["empty", "real"]);
-    }
-
-    #[test]
-    fn drop_empty_multi_cwd_mixed() {
-        let mut sessions = vec![
-            make_merged("a-nonempty", "/repo-a", "2026-04-03T00:00:00Z", 3),
-            make_merged("a-empty1", "/repo-a", "2026-04-02T00:00:00Z", 0),
-            make_merged("a-empty2", "/repo-a", "2026-04-01T00:00:00Z", 0),
-            make_merged("b-empty1", "/repo-b", "2026-03-03T00:00:00Z", 0),
-            make_merged("b-nonempty", "/repo-b", "2026-03-02T00:00:00Z", 7),
-            make_merged("b-empty2", "/repo-b", "2026-03-01T00:00:00Z", 0),
-        ];
-        drop_empty_sessions(&mut sessions);
-        assert!(sessions.iter().any(|s| s.session_id == "a-nonempty"));
-        assert!(sessions.iter().any(|s| s.session_id == "b-nonempty"));
-        assert!(!sessions.iter().any(is_empty_session));
-        assert_eq!(sessions.len(), 2);
     }
 
     // ── limit applied after merge tests ─────────────────────────────────
