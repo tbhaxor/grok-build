@@ -110,6 +110,7 @@ fn bench_single_frame(c: &mut Criterion) {
             &[],
             None,
             None,
+            None,
         );
     }
 
@@ -133,6 +134,7 @@ fn bench_single_frame(c: &mut Criterion) {
                 0,
                 0,
                 &[],
+                None,
                 None,
                 None,
             );
@@ -180,6 +182,7 @@ fn bench_full_scroll(c: &mut Criterion) {
             &[],
             None,
             None,
+            None,
         );
     }
 
@@ -205,6 +208,7 @@ fn bench_full_scroll(c: &mut Criterion) {
                     0,
                     0,
                     &[],
+                    None,
                     None,
                     None,
                 );
@@ -261,6 +265,7 @@ fn bench_windowed_scroll(c: &mut Criterion) {
                     content_y0,
                     paint_range.start,
                     &[],
+                    None,
                     None,
                     None,
                 );

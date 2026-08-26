@@ -412,3 +412,63 @@ fn dismiss_restores_viewport() {
     assert_eq!(agent.scrollback.selected(), before_selected);
     assert!(agent.scrollback.is_follow_mode(), "follow restored");
 }
+
+#[test]
+fn jump_to_turn_jumps_to_1_based_number() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    push_turns(&mut app, id, 3);
+    app.agents.get_mut(&id).unwrap().scrollback.goto_bottom();
+
+    dispatch(Action::JumpToTurn(1), &mut app);
+
+    let agent = &app.agents[&id];
+    assert_eq!(agent.scrollback.current_turn(), Some(0));
+    assert_eq!(agent.scrollback.selected(), Some(0));
+    assert!(agent.toast.is_none(), "in-range goto must not toast");
+}
+
+#[test]
+fn jump_to_turn_out_of_bounds_toasts() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    push_turns(&mut app, id, 2);
+    let before_turn = app.agents[&id].scrollback.current_turn();
+    let before_selected = app.agents[&id].scrollback.selected();
+    let before_offset = app.agents[&id].scrollback.scroll_offset();
+
+    dispatch(Action::JumpToTurn(10), &mut app);
+
+    let agent = &app.agents[&id];
+    let toast = agent
+        .toast
+        .as_ref()
+        .map(|(msg, _)| msg.as_str())
+        .expect("oob goto should toast");
+    assert!(
+        toast.contains("doesn't exist"),
+        "expected doesn't-exist toast, got {toast:?}"
+    );
+    assert_eq!(
+        agent.scrollback.current_turn(),
+        before_turn,
+        "viewport turn must stay put on oob goto"
+    );
+    assert_eq!(agent.scrollback.selected(), before_selected);
+    assert_eq!(agent.scrollback.scroll_offset(), before_offset);
+}
+
+#[test]
+fn jump_to_turn_dismisses_open_jump_picker() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    push_turns(&mut app, id, 3);
+    dispatch(Action::JumpShowPicker, &mut app);
+    assert!(app.agents[&id].jump_state.is_some());
+
+    dispatch(Action::JumpToTurn(2), &mut app);
+
+    let agent = &app.agents[&id];
+    assert!(agent.jump_state.is_none(), "goto closes the jump picker");
+    assert_eq!(agent.scrollback.current_turn(), Some(1));
+}

@@ -1287,6 +1287,7 @@ mod tests {
             &[],
             Some((state.group_spans(), 0)),
             state.cwd(),
+            None,
         );
         buf
     }

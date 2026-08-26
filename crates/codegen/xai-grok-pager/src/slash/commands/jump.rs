@@ -1,3 +1,5 @@
+//! `/jump` — open the turn picker, or `/jump N` to jump straight to turn N.
+
 use crate::app::actions::Action;
 use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
 use crate::slash::{ModeSupport, Remedy};
@@ -10,7 +12,7 @@ impl SlashCommand for JumpCommand {
     }
 
     fn description(&self) -> &str {
-        "Jump to a turn in the conversation"
+        "Jump to a turn (/jump [N])"
     }
 
     fn session_scoped(&self) -> bool {
@@ -24,11 +26,40 @@ impl SlashCommand for JumpCommand {
     }
 
     fn usage(&self) -> &str {
-        "/jump"
+        "/jump [N]"
     }
 
-    fn run(&self, _ctx: &mut CommandExecCtx, _args: &str) -> CommandResult {
-        CommandResult::Action(Action::JumpShowPicker)
+    fn takes_args(&self) -> bool {
+        true
+    }
+
+    fn args_required(&self) -> bool {
+        false
+    }
+
+    fn arg_placeholder(&self) -> Option<&str> {
+        Some("[N]")
+    }
+
+    fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
+        match parse_jump_args(args) {
+            Ok(None) => CommandResult::Action(Action::JumpShowPicker),
+            Ok(Some(turn)) => CommandResult::Action(Action::JumpToTurn(turn)),
+            Err(msg) => CommandResult::Error(msg),
+        }
+    }
+}
+
+/// Parse `/jump` args: empty → picker; a 1-based turn number → direct jump.
+fn parse_jump_args(args: &str) -> Result<Option<usize>, String> {
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    match trimmed.parse::<usize>() {
+        Ok(0) => Err("Turn number must be 1 or greater".to_string()),
+        Ok(n) => Ok(Some(n)),
+        Err(_) => Err("Usage: /jump [N] where N is a turn number (e.g. /jump 10)".to_string()),
     }
 }
 
@@ -36,6 +67,7 @@ impl SlashCommand for JumpCommand {
 mod tests {
     use super::*;
     use crate::acp::model_state::ModelState;
+    use crate::app::actions::Action;
     use crate::app::bundle::BundleState;
     use crate::settings::PagerLocalSnapshot;
 
@@ -50,22 +82,59 @@ mod tests {
         role_details: Vec::new(),
     };
 
-    #[test]
-    fn jump_returns_show_picker_action() {
-        let models = ModelState::default();
-        let mut ctx = CommandExecCtx {
-            models: &models,
+    fn make_ctx(models: &ModelState) -> CommandExecCtx<'_> {
+        CommandExecCtx {
+            models,
             session_id: None,
             bundle_state: &DEFAULT_BUNDLE_STATE,
             screen_mode: crate::app::ScreenMode::Fullscreen,
             billing_surface_visible: true,
             usage_command_visible: true,
             pager_state: PagerLocalSnapshot::default(),
-        };
+        }
+    }
+
+    #[test]
+    fn jump_no_args_opens_picker() {
+        let models = ModelState::default();
+        let mut ctx = make_ctx(&models);
         let result = JumpCommand.run(&mut ctx, "");
         assert!(matches!(
             result,
             CommandResult::Action(Action::JumpShowPicker)
         ));
+    }
+
+    #[test]
+    fn jump_with_number_jumps_directly() {
+        let models = ModelState::default();
+        let mut ctx = make_ctx(&models);
+        let result = JumpCommand.run(&mut ctx, "10");
+        assert!(matches!(
+            result,
+            CommandResult::Action(Action::JumpToTurn(10))
+        ));
+    }
+
+    #[test]
+    fn jump_rejects_zero() {
+        let models = ModelState::default();
+        let mut ctx = make_ctx(&models);
+        let result = JumpCommand.run(&mut ctx, "0");
+        assert!(matches!(result, CommandResult::Error(msg) if msg.contains("1 or greater")));
+    }
+
+    #[test]
+    fn jump_rejects_non_numeric() {
+        let models = ModelState::default();
+        let mut ctx = make_ctx(&models);
+        let result = JumpCommand.run(&mut ctx, "abc");
+        assert!(matches!(result, CommandResult::Error(_)));
+    }
+
+    #[test]
+    fn parse_trims_whitespace() {
+        assert_eq!(parse_jump_args("  3  ").unwrap(), Some(3));
+        assert_eq!(parse_jump_args("   ").unwrap(), None);
     }
 }
