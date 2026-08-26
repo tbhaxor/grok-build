@@ -1042,6 +1042,8 @@ pub enum Action {
     JumpPickerSelect(EntryId),
     /// Close the picker and restore the stashed viewport.
     JumpDismiss,
+    /// Jump directly to a 1-based turn number (`/jump N`).
+    JumpToTurn(usize),
 }
 /// A server-authoritative queue row plus the version its removal is checked against.
 #[derive(Clone, Debug, Eq, PartialEq)]

@@ -51,6 +51,15 @@ Branch the current session into a new agent, keeping history up to this point.
 
 Roll the conversation back to an earlier turn and discard everything after it. `/undo` is the same command.
 
+### `/jump [N]`
+
+Jump to a turn in the conversation. With no arguments, opens a picker listing every turn (oldest first) with live transcript preview. Pass a 1-based turn number to jump straight there — the same ordinals shown in the picker and on a hovered user-prompt timestamp. Out-of-range numbers toast `Turn N doesn't exist` and leave the viewport alone. Fullscreen only.
+
+```
+/jump
+/jump 10
+```
+
 ### `/copy`
 
 Copy the most recent response's source markdown to the clipboard. Pass a number to copy the Nth-latest response instead, or a file path to write the text to a file rather than the clipboard (handy over SSH, where the local clipboard is often unreachable).
@@ -439,7 +448,7 @@ Open the settings modal to view and change configuration interactively. Aliases:
 
 ### `/timestamps`
 
-Toggle message timestamps on or off.
+Toggle message timestamps on or off. Hovering a timestamp expands it to full time and date; on user prompts the expanded form also shows the 1-based turn number (`HH:mm:ss | MMM DD | N`).
 
 ---
 

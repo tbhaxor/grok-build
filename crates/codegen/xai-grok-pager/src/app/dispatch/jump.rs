@@ -81,3 +81,24 @@ pub(super) fn dispatch_jump_dismiss(app: &mut AppView) -> Vec<Effect> {
     agent.dismiss_jump_picker();
     vec![]
 }
+
+/// `/jump N`: jump to the 1-based turn number. Out-of-range turns toast and
+/// leave the viewport alone. Dismisses an open jump picker first so the two
+/// navigation UIs never fight.
+pub(super) fn dispatch_jump_to_turn(app: &mut AppView, turn_number: usize) -> Vec<Effect> {
+    let ActiveView::Agent(id) = app.active_view else {
+        return vec![];
+    };
+    let Some(agent) = app.agents.get_mut(&id) else {
+        return vec![];
+    };
+    // A leftover picker would still own keys/wheel after a direct jump.
+    agent.dismiss_jump_picker();
+
+    // Display is 1-based (matches `/jump` ordinals and the hover timestamp).
+    let turn_idx = turn_number.saturating_sub(1);
+    if turn_number == 0 || !agent.scrollback.jump_to_turn(turn_idx) {
+        app.show_toast(&format!("Turn {turn_number} doesn't exist"));
+    }
+    vec![]
+}

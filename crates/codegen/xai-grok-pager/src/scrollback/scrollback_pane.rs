@@ -744,6 +744,7 @@ impl ScrollbackPane {
             let scratch_area = Rect::new(0, 0, area.width, render_height);
 
             // Render full header to scratch using existing method
+            let turn_number = state.turn_containing(entry_idx).map(|i| i + 1);
             let mut lines = Self::render_entry_with_ctx_static(
                 entry,
                 &ctx,
@@ -752,6 +753,7 @@ impl ScrollbackPane {
                 scratch_buf,
                 mouse_pos,
                 selection_entry_idx,
+                turn_number,
             );
 
             // Copy visible rows (after clip_top) to output buffer
@@ -779,6 +781,7 @@ impl ScrollbackPane {
             lines
         } else {
             // No clipping needed - render directly with max_lines
+            let turn_number = state.turn_containing(entry_idx).map(|i| i + 1);
             Self::render_entry_with_ctx_static(
                 entry,
                 &ctx,
@@ -787,6 +790,7 @@ impl ScrollbackPane {
                 buf,
                 mouse_pos,
                 selection_entry_idx,
+                turn_number,
             )
         };
 
@@ -825,6 +829,8 @@ impl ScrollbackPane {
         buf: &mut Buffer,
         mouse_pos: Option<(u16, u16)>,
         selection_entry_idx: usize,
+        // 1-based turn ordinal for user-prompt timestamp hover.
+        turn_number: Option<usize>,
     ) -> Vec<ResolvedSelectableLine> {
         use crate::scrollback::types::BlockBackground;
 
@@ -943,11 +949,13 @@ impl ScrollbackPane {
                     && mx >= content_area.x + content_area.width.saturating_sub(10)
                     && mx < content_area.x + content_area.width
             });
-            let ts_str = if ts_hovered {
-                ts.format("  %H:%M:%S | %b %d").to_string()
-            } else {
-                ts.format("  %-I:%M %p").to_string()
-            };
+            // Sticky headers are user prompts only; include the 1-based turn
+            // number on hover (matches EntryRenderer for in-flow prompts).
+            let turn = ts_hovered
+                .then(|| turn_number.filter(|_| entry.block.is_user_prompt()))
+                .flatten();
+            let ts_str =
+                crate::scrollback::wrappers::format_message_timestamp(ts, ts_hovered, turn);
             let ts_width = ts_str.len() as u16;
             if content_area.width > ts_width + 1
                 && first_content_y < content_area.y + content_area.height
@@ -1079,6 +1087,7 @@ impl ScrollbackPane {
             &self.media_paths,
             Some((state.group_spans(), paint_range.start)),
             state.cwd(),
+            Some(state.turns()),
         );
         let result = rendered.result;
         let selection_boundaries = rendered.selection_boundaries;

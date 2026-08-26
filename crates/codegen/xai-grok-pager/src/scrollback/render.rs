@@ -9,11 +9,11 @@ use ratatui::layout::Rect;
 use super::block::{BlockContent, RenderBlock};
 use super::entry::ScrollbackEntry;
 use super::layout::HorizontalLayout;
-use super::state::EntryLayoutInfo;
 use super::state::groups::{GroupKind, GroupSpan, span_containing};
 use super::state::verb_group::{
     GroupHeaderLabel, truncation_header_label, verb_group_header_label,
 };
+use super::state::{EntryLayoutInfo, Turn};
 use super::text_selection::{
     ResolvedSelectableLine, ResolvedSelectionBoundaries, ResolvedSelectionModel,
     VisibleBlockGeometry,
@@ -216,6 +216,8 @@ pub struct SelectedEntryArea {
 ///   verb label walk's own run classification and to the plain "N more" /
 ///   "N tool calls & thoughts" truncation text.
 /// - `cwd`: Session/worktree cwd used for path-aware measurement and paint.
+/// - `turns`: Conversation turns (for user-prompt timestamp hover turn numbers).
+///   `None` in harnesses that don't carry timeline state.
 ///
 /// # Panics
 /// Debug-asserts if `entry_layouts_cache.len() != entries.len()`.
@@ -240,6 +242,7 @@ pub fn render_scrolled_entries_with_scratch(
     media_paths: &[std::path::PathBuf],
     group_spans: Option<(&[GroupSpan], usize)>,
     cwd: Option<&std::path::Path>,
+    turns: Option<&[Turn]>,
 ) -> ScrollRenderResult {
     render_scrolled_entries_with_selection_boundaries(
         buf,
@@ -259,6 +262,7 @@ pub fn render_scrolled_entries_with_scratch(
         media_paths,
         group_spans,
         cwd,
+        turns,
     )
     .result
 }
@@ -282,6 +286,7 @@ pub(crate) fn render_scrolled_entries_with_selection_boundaries(
     media_paths: &[std::path::PathBuf],
     group_spans: Option<(&[GroupSpan], usize)>,
     cwd: Option<&std::path::Path>,
+    turns: Option<&[Turn]>,
 ) -> ScrollRenderResultWithBoundaries {
     if entries.is_empty() || viewport.width == 0 || viewport.height == 0 {
         return ScrollRenderResultWithBoundaries::default();
@@ -430,6 +435,18 @@ pub(crate) fn render_scrolled_entries_with_selection_boundaries(
         } else {
             None
         };
+        // 1-based turn ordinal for user-prompt timestamp hover (`| N`).
+        let turn_number = entry
+            .block
+            .is_user_prompt()
+            .then(|| {
+                turns.and_then(|ts| {
+                    ts.iter()
+                        .position(|t| t.prompt_index == logical_idx)
+                        .map(|i| i + 1)
+                })
+            })
+            .flatten();
         let renderer = EntryRenderer::new(entry, theme)
             .with_appearance_ref(appearance)
             .with_tick(tick)
@@ -440,7 +457,8 @@ pub(crate) fn render_scrolled_entries_with_selection_boundaries(
             .with_group_header_count(entry_layout_info.group_header_count)
             .with_group_collapse_header(entry_layout_info.group_collapse_header)
             .with_group_header_label(header_label.as_ref())
-            .with_cwd(cwd);
+            .with_cwd(cwd)
+            .with_turn_number(turn_number);
         renderer.render(entry_content_area, buf);
 
         if dim_from_entry.is_some_and(|d| logical_idx >= d) {

@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::path::Path;
 
+use chrono::{DateTime, Local};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
@@ -17,6 +18,27 @@ use crate::scrollback::entry::ScrollbackEntry;
 use crate::scrollback::layout::HorizontalLayout;
 use crate::scrollback::types::{AccentStyle, BlockBackground, DisplayMode, Selectable};
 use crate::theme::{self, Theme};
+
+/// Format the right-aligned message timestamp overlay.
+///
+/// Short (`h:mm AM/PM`) by default; on hover expands to
+/// `HH:mm:ss | MMM DD` and, when `turn_number` is set (user prompts),
+/// appends ` | N` with the 1-based turn ordinal.
+pub(crate) fn format_message_timestamp(
+    ts: DateTime<Local>,
+    expanded: bool,
+    turn_number: Option<usize>,
+) -> String {
+    if expanded {
+        let mut s = ts.format("  %H:%M:%S | %b %d").to_string();
+        if let Some(n) = turn_number {
+            s.push_str(&format!(" | {n}"));
+        }
+        s
+    } else {
+        ts.format("  %-I:%M %p").to_string()
+    }
+}
 
 /// Animation speed for running blocks (radians per tick).
 /// ~0.15 gives a nice smooth wave that travels the block in ~40 ticks.
@@ -80,6 +102,10 @@ pub struct EntryRenderer<'a> {
     dim_accent: bool,
     /// Session/worktree cwd (`AgentSession.cwd`) for Expanded tool paths.
     cwd: Option<&'a Path>,
+    /// 1-based turn number for user-prompt timestamp hover expansion.
+    /// `None` when the entry is not a turn prompt or the caller has no
+    /// timeline context (unit tests, harnesses).
+    turn_number: Option<usize>,
 }
 
 impl<'a> EntryRenderer<'a> {
@@ -100,6 +126,7 @@ impl<'a> EntryRenderer<'a> {
             hide_accent: false,
             dim_accent: false,
             cwd: None,
+            turn_number: None,
         }
     }
 
@@ -202,6 +229,12 @@ impl<'a> EntryRenderer<'a> {
     /// Set the mouse position for timestamp hover detection.
     pub fn with_mouse_pos(mut self, pos: Option<(u16, u16)>) -> Self {
         self.mouse_pos = pos;
+        self
+    }
+
+    /// Set the 1-based turn number shown on user-prompt timestamp hover.
+    pub fn with_turn_number(mut self, turn_number: Option<usize>) -> Self {
+        self.turn_number = turn_number;
         self
     }
 
@@ -955,8 +988,8 @@ impl Renderable for EntryRenderer<'_> {
 
         // Overlay timestamp on the first content line for message blocks.
         // Short format (h:mm AM/PM) by default; expands to full format
-        // (HH:mm:ss | MMM DD) when the mouse hovers over the timestamp area.
-        // Gated on appearance.show_timestamps (toggled via /timestamps).
+        // (HH:mm:ss | MMM DD [| turn]) when the mouse hovers over the timestamp
+        // area. Gated on appearance.show_timestamps (toggled via /timestamps).
         if self.appearance().show_timestamps
             && content_skip == 0
             && !output.is_empty()
@@ -971,11 +1004,14 @@ impl Renderable for EntryRenderer<'_> {
                     && mx >= content_area.x + content_area.width.saturating_sub(10)
                     && mx < content_area.x + content_area.width
             });
-            let ts_str = if ts_hovered {
-                ts.format("  %H:%M:%S | %b %d").to_string()
-            } else {
-                ts.format("  %-I:%M %p").to_string()
-            };
+            // Turn number only on user prompts (matches sticky-header hover).
+            let turn = self
+                .entry
+                .block
+                .is_user_prompt()
+                .then_some(self.turn_number)
+                .flatten();
+            let ts_str = format_message_timestamp(ts, ts_hovered, turn);
             let ts_width = ts_str.len() as u16;
             if content_area.width > ts_width + 1 && first_content_y < max_row {
                 let ts_x = content_area.x + content_area.width - ts_width;
@@ -1292,6 +1328,56 @@ mod tests {
         assert_eq!(
             rendered, expected,
             "Mouse-hovered timestamp should show expanded format '{expected}'"
+        );
+    }
+
+    #[test]
+    fn test_user_prompt_timestamp_hover_includes_turn_number() {
+        let theme = Theme::current();
+        let entry = ScrollbackEntry::new(RenderBlock::user_prompt("hello"));
+        let width: u16 = 80;
+
+        // UserPrompt has vpad → first content row at y=1.
+        let hover_x = width - 2 - 5;
+        let renderer = EntryRenderer::new(&entry, &theme)
+            .with_mouse_pos(Some((hover_x, 1)))
+            .with_turn_number(Some(10));
+
+        let height = renderer.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        renderer.render(area, &mut buf);
+
+        let expected = format!(
+            "{} | 10",
+            entry.created_at.unwrap().format("%H:%M:%S | %b %d")
+        );
+        let ts_width = expected.len() as u16;
+        let ts_x = width - 2 - ts_width;
+        let rendered = collect_row_symbols(&buf, 1, ts_x, ts_x + ts_width);
+        assert_eq!(
+            rendered, expected,
+            "User-prompt hover should append turn number after date"
+        );
+    }
+
+    #[test]
+    fn test_format_message_timestamp_turn_suffix() {
+        let ts = chrono::Local::now();
+        let short = format_message_timestamp(ts, false, Some(3));
+        assert!(
+            !short.contains('|'),
+            "short format ignores turn number: {short}"
+        );
+        let expanded = format_message_timestamp(ts, true, Some(3));
+        assert!(
+            expanded.ends_with(" | 3"),
+            "expanded format should end with turn: {expanded}"
+        );
+        let no_turn = format_message_timestamp(ts, true, None);
+        assert!(
+            !no_turn.ends_with("| 3") && no_turn.matches('|').count() == 1,
+            "without turn number only one separator: {no_turn}"
         );
     }
 

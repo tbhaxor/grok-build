@@ -117,6 +117,7 @@ fn render_with_scratch_and_buffer_with_cwd(
         &[],
         None,
         cwd,
+        None,
     );
     (result, buf)
 }
@@ -150,6 +151,7 @@ fn render_with_selection_boundaries(
         &[],
         None,
         None,
+        None,
     )
 }
 
@@ -180,6 +182,7 @@ fn render_with_highlight(
         0,
         0,
         &[],
+        None,
         None,
         None,
     );
@@ -359,6 +362,7 @@ fn large_scrollback_mid_offset_viewport_window_matches_full_pass() {
         &[],
         None,
         None,
+        None,
     );
 
     // Production window: the same helper `render_content` paints through.
@@ -393,6 +397,7 @@ fn large_scrollback_mid_offset_viewport_window_matches_full_pass() {
         content_y0,
         first,
         &[],
+        None,
         None,
         None,
     );
@@ -490,6 +495,7 @@ fn windowed_paint_renders_full_verb_group_label_for_offscreen_members() {
         &[],
         None,
         None,
+        None,
     );
 
     let header_row = buffer_row_text(&buf, viewport.height - 1);
@@ -557,6 +563,7 @@ fn windowed_paint_labels_truncation_header_on_last_viewport_row() {
         paint_range.start,
         &[],
         Some((state.group_spans(), paint_range.start)),
+        None,
         None,
     );
 
@@ -724,6 +731,7 @@ fn rendered_verb_group_label_spans_hidden_thinking_inside_folded_run() {
         &[],
         None,
         None,
+        None,
     );
 
     let header_row = buffer_row_text(&buf, 0);
@@ -775,6 +783,7 @@ fn rendered_verb_group_label_stays_tools_only_across_folded_thought() {
         0,
         0,
         &[],
+        None,
         None,
         None,
     );
@@ -839,6 +848,7 @@ fn rendered_verb_group_singleton_folds_tool_and_trailing_thoughts() {
         &[],
         None,
         None,
+        None,
     );
 
     let header_row = buffer_row_text(&buf, 0);
@@ -899,6 +909,7 @@ fn rendered_verb_group_folds_subagent_row_and_expansion_keeps_activity() {
         &[],
         None,
         None,
+        None,
     );
     let header_row = buffer_row_text(&buf, 0);
     assert!(
@@ -929,6 +940,7 @@ fn rendered_verb_group_folds_subagent_row_and_expansion_keeps_activity() {
         0,
         0,
         &[],
+        None,
         None,
         None,
     );
@@ -972,6 +984,7 @@ fn render_state(
         0,
         &[],
         with_spans.then(|| (state.group_spans(), 0usize)),
+        None,
         None,
     );
     (buf, result)
@@ -1564,6 +1577,7 @@ fn overlay_markdown_relative_link_opens_as_file_url() {
         &media,
         None,
         None,
+        None,
     );
 
     let links: Vec<Arc<str>> = result
@@ -1992,6 +2006,7 @@ fn group_header_entry_does_not_leak_hidden_line_links() {
         &[],
         None,
         None,
+        None,
     );
 
     let links: Vec<(u16, u16, u16, String)> = result
@@ -2093,6 +2108,7 @@ fn collapse_header_entry_does_not_leak_links_but_visible_group_entries_do() {
         &[],
         None,
         None,
+        None,
     );
 
     let links: Vec<(u16, String)> = result
@@ -2192,6 +2208,7 @@ fn group_header_entry_contributes_no_selectable_lines() {
         &[],
         None,
         None,
+        None,
     );
 
     let lines: Vec<(usize, u16, String)> = result
@@ -2279,6 +2296,7 @@ fn verb_group_header_selection_geometry_tracks_chrome() {
             &[],
             None,
             None,
+            None,
         );
         result
             .selection_model
@@ -2318,6 +2336,7 @@ fn verb_group_header_selection_geometry_tracks_chrome() {
             0,
             0,
             &[],
+            None,
             None,
             None,
         );
@@ -2361,6 +2380,7 @@ fn verb_group_header_selection_geometry_tracks_chrome() {
             0,
             0,
             &[],
+            None,
             None,
             None,
         );
@@ -2462,6 +2482,7 @@ fn verb_group_expanded_slot_header_and_member_select_independently() {
         &[],
         None,
         None,
+        None,
     );
     let model = &result.selection_model;
 
@@ -2560,6 +2581,7 @@ fn group_header_entry_not_search_highlighted_from_hidden_text() {
         &[],
         None,
         None,
+        None,
     );
 
     assert!(
@@ -2646,6 +2668,7 @@ fn group_header_media_entry_registers_no_media_placements() {
         0,
         0,
         &[],
+        None,
         None,
         None,
     );
@@ -2788,6 +2811,7 @@ fn tool_header_link_target_overlay_covers_path_after_bullet() {
         &[],
         None,
         Some(cwd.as_path()),
+        None,
     );
 
     let file_links: Vec<_> = result
@@ -3593,6 +3617,7 @@ fn diagram_emits_affordance_placement_not_inline_image() {
         0,
         0,
         &[],
+        None,
         None,
         None,
     );
