@@ -267,7 +267,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 managed_mcp_handle: Default::default(),
                 initial_client_mcp_servers: vec![],
                 tool_metadata_snapshot: Arc::new(std::sync::Mutex::new(Default::default())),
-                mcp_announced_servers: Mutex::new(HashMap::new()),
+                mcp_announcements: Default::default(),
                 mcp_reminder_mode: McpReminderMode::Delta,
                 mcp_reminder_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mcp_connecting_reminder_injected: std::cell::Cell::new(false),
@@ -309,6 +309,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 turn_stream_drained: parking_lot::Mutex::new(None),
                 pending_image_strip: parking_lot::Mutex::new(None),
                 sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
+                sampling_gate: None,
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
                 image_description_model: crate::test_support::TEST_MODEL.to_owned(),
                 image_describe_cache: Arc::new(
@@ -759,7 +760,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 managed_mcp_handle: Default::default(),
                 initial_client_mcp_servers: vec![],
                 tool_metadata_snapshot: Arc::new(std::sync::Mutex::new(Default::default())),
-                mcp_announced_servers: Mutex::new(HashMap::new()),
+                mcp_announcements: Default::default(),
                 mcp_reminder_mode: McpReminderMode::Delta,
                 mcp_reminder_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mcp_connecting_reminder_injected: std::cell::Cell::new(false),
@@ -801,6 +802,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 turn_stream_drained: parking_lot::Mutex::new(None),
                 pending_image_strip: parking_lot::Mutex::new(None),
                 sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
+                sampling_gate: None,
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
                 image_description_model: crate::test_support::TEST_MODEL.to_owned(),
                 image_describe_cache: Arc::new(
@@ -1073,7 +1075,7 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                 tool_metadata_snapshot: Arc::new(
                     std::sync::Mutex::new(Default::default()),
                 ),
-                mcp_announced_servers: Mutex::new(HashMap::new()),
+                mcp_announcements: Default::default(),
                 mcp_reminder_mode: McpReminderMode::Delta,
                 mcp_reminder_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mcp_connecting_reminder_injected: std::cell::Cell::new(false),
@@ -1123,6 +1125,7 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                 turn_stream_drained: parking_lot::Mutex::new(None),
                 pending_image_strip: parking_lot::Mutex::new(None),
                 sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
+                sampling_gate: None,
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
                 image_description_model: crate::test_support::TEST_MODEL.to_owned(),
                 image_describe_cache: Arc::new(
@@ -2615,7 +2618,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 tool_metadata_snapshot: Arc::new(
                     std::sync::Mutex::new(Default::default()),
                 ),
-                mcp_announced_servers: Mutex::new(HashMap::new()),
+                mcp_announcements: Default::default(),
                 mcp_reminder_mode: McpReminderMode::Delta,
                 mcp_reminder_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 mcp_connecting_reminder_injected: std::cell::Cell::new(false),
@@ -2665,6 +2668,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 turn_stream_drained: parking_lot::Mutex::new(None),
                 pending_image_strip: parking_lot::Mutex::new(None),
                 sampler_handle: sampler_handle.clone(),
+                sampling_gate: None,
                 rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
                 image_description_model: crate::test_support::TEST_MODEL.to_owned(),
                 image_describe_cache: Arc::new(
