@@ -1,0 +1,194 @@
+# Nightly: merge upstream (xai-org/grok-build), build the CLI, upload artifacts,
+# and push the merged main back to this fork.
+#
+# Manual run: Actions → Nightly → Run workflow
+
+name: Nightly
+
+on:
+  schedule:
+    # Every day at 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      skip_push:
+        description: "Merge and build only; do not push main to origin"
+        type: boolean
+        default: false
+      skip_build:
+        description: "Sync (and push) only; skip the release build"
+        type: boolean
+        default: false
+
+concurrency:
+  group: nightly-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  UPSTREAM_URL: https://github.com/xai-org/grok-build.git
+  UPSTREAM_BRANCH: main
+  ORIGIN_BRANCH: main
+  TARGET: x86_64-unknown-linux-gnu
+
+jobs:
+  nightly:
+    name: Sync, build, publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so merges and pushes are correct
+          fetch-depth: 0
+          ref: main
+
+      # Bot noreply identity: https://github.com/orgs/community/discussions/26560
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch and merge upstream
+        id: sync
+        run: |
+          set -euo pipefail
+
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream "${UPSTREAM_URL}"
+          git fetch --no-tags origin "${ORIGIN_BRANCH}"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+          git checkout -B "${ORIGIN_BRANCH}" "origin/${ORIGIN_BRANCH}"
+
+          before="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          echo "Local HEAD before merge: ${before}"
+          echo "upstream/${UPSTREAM_BRANCH}: ${upstream_sha}"
+          echo "upstream_sha=${upstream_sha}" >> "${GITHUB_OUTPUT}"
+
+          if git merge-base --is-ancestor "upstream/${UPSTREAM_BRANCH}" HEAD; then
+            echo "Already contains upstream/${UPSTREAM_BRANCH}; nothing to merge."
+            echo "merged=false" >> "${GITHUB_OUTPUT}"
+          else
+            # Merge commit keeps fork-only history visible next to upstream syncs
+            git merge --no-ff --no-edit "upstream/${UPSTREAM_BRANCH}" \
+              -m "chore: merge upstream/${UPSTREAM_BRANCH} (${upstream_sha})"
+            echo "merged=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+          after="$(git rev-parse HEAD)"
+          echo "Local HEAD after merge: ${after}"
+          echo "head_sha=${after}" >> "${GITHUB_OUTPUT}"
+
+          if [ "${before}" != "${after}" ]; then
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          fi
+
+          if [ -f SOURCE_REV ]; then
+            echo "SOURCE_REV=$(tr -d '[:space:]' < SOURCE_REV)"
+          fi
+
+      # Push the merge even if the later build fails so the fork stays current.
+      - name: Push merged main to origin
+        if: ${{ steps.sync.outputs.changed == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.skip_push) }}
+        run: |
+          set -euo pipefail
+          echo "Pushing $(git rev-parse HEAD) to origin/${ORIGIN_BRANCH}"
+          git push origin "HEAD:${ORIGIN_BRANCH}"
+
+      - name: Install Rust toolchain
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94.0"
+          targets: ${{ env.TARGET }}
+
+      - name: Install DotSlash
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
+        run: |
+          dest="${HOME}/.local/bin"
+          mkdir -p "$dest"
+          curl -LSfs "https://github.com/facebook/dotslash/releases/latest/download/dotslash-ubuntu-22.04.x86_64.tar.gz" | tar xz -C "$dest"
+          echo "$dest" >> "$GITHUB_PATH"
+
+      - name: Install protoc
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "29.3"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache cargo
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: nightly-${{ env.TARGET }}
+
+      - name: Build release binary
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
+        run: cargo build --release -p xai-grok-pager-bin --target "${TARGET}"
+
+      - name: Package binary
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
+        id: package
+        run: |
+          set -euo pipefail
+          src="target/${TARGET}/release/xai-grok-pager"
+          test -x "$src"
+
+          short_sha="$(git rev-parse --short HEAD)"
+          date_utc="$(date -u +%Y%m%d)"
+          artifact="grok-${TARGET}"
+          versioned="grok-${TARGET}-${date_utc}-${short_sha}"
+
+          cp "$src" "${artifact}"
+          cp "$src" "${versioned}"
+          chmod +x "${artifact}" "${versioned}"
+
+          "${artifact}" --version || true
+
+          {
+            echo "artifact=${artifact}"
+            echo "versioned=${versioned}"
+            echo "short_sha=${short_sha}"
+            echo "date_utc=${date_utc}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Upload build artifacts
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: grok-${{ env.TARGET }}-${{ steps.package.outputs.date_utc }}-${{ steps.package.outputs.short_sha }}
+          path: |
+            ${{ steps.package.outputs.artifact }}
+            ${{ steps.package.outputs.versioned }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Summary
+        if: always()
+        run: |
+          skip_build="${{ github.event_name == 'workflow_dispatch' && inputs.skip_build || false }}"
+          skip_push="${{ github.event_name == 'workflow_dispatch' && inputs.skip_push || false }}"
+          {
+            echo "## Nightly"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Upstream | \`${UPSTREAM_URL}\` (\`${UPSTREAM_BRANCH}\`) |"
+            echo "| Upstream SHA | \`${{ steps.sync.outputs.upstream_sha }}\` |"
+            echo "| Result HEAD | \`${{ steps.sync.outputs.head_sha }}\` |"
+            echo "| Merged upstream | \`${{ steps.sync.outputs.merged }}\` |"
+            echo "| Tree changed | \`${{ steps.sync.outputs.changed }}\` |"
+            echo "| Skip build | \`${skip_build}\` |"
+            echo "| Skip push | \`${skip_push}\` |"
+            if [ "${skip_build}" != "true" ]; then
+              echo "| Artifact | \`${{ steps.package.outputs.versioned }}\` |"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
