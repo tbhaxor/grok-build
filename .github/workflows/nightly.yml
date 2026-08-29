@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Full history so merges and pushes are correct
           fetch-depth: 0
@@ -119,10 +119,14 @@ jobs:
 
       - name: Install protoc
         if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "29.3"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dest="${HOME}/.local/bin"
+          mkdir -p "$dest"
+          curl -LSfs "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip" -o /tmp/protoc.zip
+          unzip -qo /tmp/protoc.zip -d /tmp/protoc
+          install -m 0755 /tmp/protoc/bin/protoc "$dest/protoc"
+          echo "$dest" >> "$GITHUB_PATH"
+          "$dest/protoc" --version
 
       - name: Cache cargo
         if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
@@ -162,7 +166,7 @@ jobs:
 
       - name: Upload build artifacts
         if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: grok-${{ env.TARGET }}-${{ steps.package.outputs.date_utc }}-${{ steps.package.outputs.short_sha }}
           path: |

@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -31,10 +31,14 @@ jobs:
           echo "$dest" >> "$GITHUB_PATH"
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "29.3"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dest="${HOME}/.local/bin"
+          mkdir -p "$dest"
+          curl -LSfs "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip" -o /tmp/protoc.zip
+          unzip -qo /tmp/protoc.zip -d /tmp/protoc
+          install -m 0755 /tmp/protoc/bin/protoc "$dest/protoc"
+          echo "$dest" >> "$GITHUB_PATH"
+          "$dest/protoc" --version
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -51,7 +55,7 @@ jobs:
           chmod +x grok-x86_64-unknown-linux-gnu
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: grok-x86_64-unknown-linux-gnu
           path: grok-x86_64-unknown-linux-gnu
@@ -63,13 +67,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
 
       - name: Publish GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true

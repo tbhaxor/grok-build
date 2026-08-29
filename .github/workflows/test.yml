@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 120
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -52,10 +52,14 @@ jobs:
           echo "$dest" >> "$GITHUB_PATH"
 
       - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          version: "29.3"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          dest="${HOME}/.local/bin"
+          mkdir -p "$dest"
+          curl -LSfs "https://github.com/protocolbuffers/protobuf/releases/download/v29.3/protoc-29.3-linux-x86_64.zip" -o /tmp/protoc.zip
+          unzip -qo /tmp/protoc.zip -d /tmp/protoc
+          install -m 0755 /tmp/protoc/bin/protoc "$dest/protoc"
+          echo "$dest" >> "$GITHUB_PATH"
+          "$dest/protoc" --version
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
