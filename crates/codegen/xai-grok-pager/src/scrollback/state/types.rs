@@ -73,6 +73,9 @@ pub(super) const MAX_TRUNCATED_HEADER_HEIGHT: u16 = 6;
 /// Used by the renderer to flash the accent on recently-finished entries.
 pub const FINISH_FLASH_DURATION_MS: u64 = 400;
 
+/// How long a successful `/jump` keeps the target prompt washed (Discord/Slack-style locate flash).
+pub const JUMP_FLASH_DURATION_MS: u64 = 700;
+
 /// Extra entries measured EXACTLY just beyond the visible viewport edge when settling lazy heights.
 /// Measuring a little below the viewport makes a just-off-screen entry exact before it scrolls in, so estimate errors never size a visible entry.
 pub(super) const MEASURE_MARGIN_ENTRIES: usize = 8;

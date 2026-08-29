@@ -9,7 +9,7 @@ pub struct JumpCommand;
 impl SlashCommand for JumpCommand {
     slash_meta! {
         name: "jump",
-        description: "Jump to a turn (/jump [N])",
+        description: "Jump to a turn by session-info index (/jump [N])",
         usage: "/jump [N]",
         takes_args: true,
         args_required: false,
@@ -29,7 +29,7 @@ impl SlashCommand for JumpCommand {
     }
 }
 
-/// Parse `/jump` args: empty → picker; a 1-based turn number → direct jump.
+/// Parse `/jump` args: empty → picker; session-info `Turn:` index → direct jump.
 fn parse_jump_args(args: &str) -> Result<Option<usize>, String> {
     let trimmed = args.trim();
     if trimmed.is_empty() {

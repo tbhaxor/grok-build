@@ -53,7 +53,7 @@ Roll the conversation back to an earlier turn and discard everything after it. `
 
 ### `/jump [N]`
 
-Jump to a turn in the conversation. With no arguments, opens a picker listing every turn (oldest first) with live transcript preview. Pass a 1-based turn number to jump straight there — the same ordinals shown in the picker and on a hovered user-prompt timestamp. Out-of-range numbers toast `Turn N doesn't exist` and leave the viewport alone. Fullscreen only.
+Jump to a turn in the conversation. With no arguments, opens a picker listing every turn (oldest first) with live transcript preview. Pass the same `Turn:` index `/session-info` shows (and that a hovered user-prompt timestamp shows) to jump straight there. Out-of-range numbers toast `Turn N doesn't exist` and leave the viewport alone. Fullscreen only.
 
 ```
 /jump

@@ -47,11 +47,17 @@ impl ScrollbackState {
             .filter_map(|(turn_idx, turn)| {
                 let (id, entry) = self.entries.get_index(turn.prompt_index)?;
                 let preview = match &entry.block {
+                    RenderBlock::UserPrompt(block) if block.is_interjection => return None,
                     RenderBlock::UserPrompt(block) => prompt_preview(&block.text),
                     _ => String::new(),
                 };
+                let display_idx = entry
+                    .block
+                    .display_turn_number()
+                    .map(|n| n.saturating_sub(1))
+                    .unwrap_or(turn_idx);
                 Some(TimelineEntry {
-                    turn_idx,
+                    turn_idx: display_idx,
                     prompt_entry_id: *id,
                     preview,
                 })
@@ -68,6 +74,16 @@ impl ScrollbackState {
                 RenderBlock::UserPrompt(block) => Some(prompt_preview(&block.text)),
                 _ => None,
             })
+    }
+
+    /// Session-info `Turn:` for the turn currently at the viewport top.
+    /// `None` when there is no active turn or that prompt has no stamped index.
+    pub fn active_display_turn(&self) -> Option<usize> {
+        let turn_idx = self.active_turn_for_viewport()?;
+        let turn = self.turns.get(turn_idx)?;
+        self.entries
+            .get_index(turn.prompt_index)
+            .and_then(|(_, entry)| entry.block.display_turn_number())
     }
 
     /// The focused turn: the last turn whose prompt is at/above the viewport top, or the first turn while pre-turn content owns the top.
@@ -150,6 +166,32 @@ mod tests {
         assert_eq!(entries[1].turn_idx, 1);
         assert_eq!(state.index_of_id(entries[1].prompt_entry_id), Some(3));
         assert_eq!(entries[1].preview, "second question");
+    }
+
+    #[test]
+    fn interjection_does_not_shift_display_turn_numbers() {
+        let mut state = ScrollbackState::new();
+        let mut first = crate::scrollback::blocks::UserPromptBlock::new("Q1");
+        first.prompt_index = Some(0);
+        state.push_block(RenderBlock::UserPrompt(first));
+        state.push_block(agent_block("a1"));
+        state.push_block(RenderBlock::interjection_prompt("steer"));
+        state.push_block(agent_block("ok"));
+        let mut second = crate::scrollback::blocks::UserPromptBlock::new("Q2");
+        second.prompt_index = Some(1);
+        state.push_block(RenderBlock::UserPrompt(second));
+        state.prepare_layout(80, 10);
+
+        let entries = state.timeline_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].turn_idx, 0);
+        assert_eq!(entries[0].preview, "Q1");
+        assert_eq!(entries[1].turn_idx, 1);
+        assert_eq!(entries[1].preview, "Q2");
+
+        assert!(state.jump_to_display_turn(2));
+        assert_eq!(state.current_turn(), Some(2));
+        assert!(!state.jump_to_display_turn(3));
     }
 
     #[test]

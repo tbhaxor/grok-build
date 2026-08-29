@@ -21,7 +21,7 @@ use crate::theme::{self, Theme};
 ///
 /// Short (`h:mm AM/PM`) by default; on hover expands to
 /// `HH:mm:ss | MMM DD` and, when `turn_number` is set (user prompts),
-/// appends ` | N` with the 1-based turn ordinal.
+/// appends ` | N` with the same `Turn:` index `/session-info` shows.
 pub(crate) fn format_message_timestamp(
     ts: DateTime<Local>,
     expanded: bool,
@@ -865,13 +865,9 @@ impl Renderable for EntryRenderer<'_> {
                     && mx >= content_area.x + content_area.width.saturating_sub(10)
                     && mx < content_area.x + content_area.width
             });
-            // Turn number only on user prompts (matches sticky-header hover).
-            let turn = self
-                .entry
-                .block
-                .is_user_prompt()
-                .then_some(self.turn_number)
-                .flatten();
+            // Session-info `Turn:` (shell turn_index). `with_turn_number` is
+            // only a fallback for tests / prompts that have not been stamped.
+            let turn = self.entry.block.display_turn_number().or(self.turn_number);
             let ts_str = format_message_timestamp(ts, ts_hovered, turn);
             let ts_width = ts_str.len() as u16;
             if content_area.width > ts_width + 1 && first_content_y < max_row {
@@ -1219,6 +1215,38 @@ mod tests {
         assert_eq!(
             rendered, expected,
             "User-prompt hover should append turn number after date"
+        );
+    }
+
+    #[test]
+    fn test_user_prompt_hover_uses_shell_prompt_index_not_scrollback_ordinal() {
+        let theme = Theme::current();
+        // Shell stamps the pre-increment 0-based index (11 → display 12),
+        // matching `/session-info`. A stale fallback ordinal must not win.
+        let mut block = crate::scrollback::blocks::UserPromptBlock::new("hello");
+        block.prompt_index = Some(11);
+        let entry = ScrollbackEntry::new(RenderBlock::UserPrompt(block));
+        let width: u16 = 80;
+        let hover_x = width - 2 - 5;
+        let renderer = EntryRenderer::new(&entry, &theme)
+            .with_mouse_pos(Some((hover_x, 1)))
+            .with_turn_number(Some(99));
+
+        let height = renderer.desired_height(width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        renderer.render(area, &mut buf);
+
+        let expected = format!(
+            "{} | 12",
+            entry.created_at.unwrap().format("%H:%M:%S | %b %d")
+        );
+        let ts_width = expected.len() as u16;
+        let ts_x = width - 2 - ts_width;
+        let rendered = collect_row_symbols(&buf, 1, ts_x, ts_x + ts_width);
+        assert_eq!(
+            rendered, expected,
+            "hover must follow session-info (prompt_index + 1), not scrollback count"
         );
     }
 

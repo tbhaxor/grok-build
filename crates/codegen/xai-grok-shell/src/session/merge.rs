@@ -146,15 +146,7 @@ pub async fn fetch_sessions_for_prune(
         remote,
         repo_urls,
         ..
-    } = fetch_lanes(
-        client,
-        cwd,
-        scope,
-        None,
-        10_000,
-        HeadlessPolicy::Include,
-    )
-    .await;
+    } = fetch_lanes(client, cwd, scope, None, 10_000, HeadlessPolicy::Include).await;
     sessions_to_prune(remote, local, &repo_urls, empty_only)
 }
 

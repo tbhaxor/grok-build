@@ -133,6 +133,41 @@ impl ScrollbackState {
         true
     }
 
+    /// Jump to the turn whose 1-based session ordinal is `display_n`
+    /// (same number `/session-info` and the hover timestamp show).
+    ///
+    /// Prefers the shell-stamped [`crate::scrollback::blocks::UserPromptBlock::prompt_index`]
+    /// so interjections cannot shift the target. Falls back to the Nth
+    /// non-interjection scrollback turn when nothing is stamped.
+    pub fn jump_to_display_turn(&mut self, display_n: usize) -> bool {
+        if display_n == 0 {
+            return false;
+        }
+        let want = display_n - 1;
+        // Walk turns (one per user prompt), not every scrollback entry.
+        let mut fallback = None;
+        let mut seen = 0usize;
+        for (turn_idx, turn) in self.turns.iter().enumerate() {
+            let Some((_, entry)) = self.entries.get_index(turn.prompt_index) else {
+                continue;
+            };
+            match &entry.block {
+                RenderBlock::UserPrompt(b) if b.is_interjection => continue,
+                RenderBlock::UserPrompt(b) if b.prompt_index == Some(want) => {
+                    return self.jump_to_turn(turn_idx);
+                }
+                RenderBlock::UserPrompt(_) => {
+                    if seen == want {
+                        fallback = Some(turn_idx);
+                    }
+                    seen += 1;
+                }
+                _ => {}
+            }
+        }
+        fallback.is_some_and(|turn_idx| self.jump_to_turn(turn_idx))
+    }
+
     /// Jump to a turn by its prompt's stable [`EntryId`]: resolve to the current index and activate that turn.
     /// Returns `false` if the id no longer exists or isn't a turn's prompt (e.g. removed since capture).
     /// Stable identity means a shifted index can't land on the wrong block.
