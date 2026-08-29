@@ -1,44 +1,23 @@
 //! `/jump` — open the turn picker, or `/jump N` to jump straight to turn N.
 
 use crate::app::actions::Action;
-use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand};
+use crate::slash::command::{CommandExecCtx, CommandResult, SlashCommand, slash_meta};
 use crate::slash::{ModeSupport, Remedy};
 
 pub struct JumpCommand;
 
 impl SlashCommand for JumpCommand {
-    fn name(&self) -> &str {
-        "jump"
-    }
-
-    fn description(&self) -> &str {
-        "Jump to a turn (/jump [N])"
-    }
-
-    fn session_scoped(&self) -> bool {
-        true
-    }
-
-    fn mode_support(&self) -> ModeSupport {
-        ModeSupport::FullscreenOnly(Remedy::SwitchMode {
+    slash_meta! {
+        name: "jump",
+        description: "Jump to a turn (/jump [N])",
+        usage: "/jump [N]",
+        takes_args: true,
+        args_required: false,
+        session_scoped: true,
+        mode_support: ModeSupport::FullscreenOnly(Remedy::SwitchMode {
             why: "minimal scrolls with your terminal's native scrollback",
-        })
-    }
-
-    fn usage(&self) -> &str {
-        "/jump [N]"
-    }
-
-    fn takes_args(&self) -> bool {
-        true
-    }
-
-    fn args_required(&self) -> bool {
-        false
-    }
-
-    fn arg_placeholder(&self) -> Option<&str> {
-        Some("[N]")
+        }),
+        arg_placeholder: "[N]",
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {

@@ -145,7 +145,16 @@ pub async fn fetch_sessions_for_prune(
         local,
         remote,
         repo_urls,
-    } = fetch_lanes(client, cwd, scope, None, 10_000).await;
+        ..
+    } = fetch_lanes(
+        client,
+        cwd,
+        scope,
+        None,
+        10_000,
+        HeadlessPolicy::Include,
+    )
+    .await;
     sessions_to_prune(remote, local, &repo_urls, empty_only)
 }
 
@@ -358,9 +367,6 @@ fn assemble_merged(
             .and_then(|p| std::path::Path::new(p).file_name())
             .and_then(|n| n.to_str())
             .map(String::from);
-        let worktree_label = s
-            .worktree_label
-            .or_else(|| crate::session::worktree::lookup_worktree_label(&s.info.cwd));
         by_id.insert(
             id.clone(),
             MergedSession {
@@ -377,7 +383,7 @@ fn assemble_merged(
                 last_active_at: s.last_active_at.map(|t| t.to_rfc3339()),
                 branch: s.head_branch,
                 repo_name,
-                worktree_label,
+                worktree_label: s.worktree_label,
                 git_root_dir: s.git_root_dir,
                 git_remotes: s.git_remotes,
                 source_workspace_dir: s.source_workspace_dir,
