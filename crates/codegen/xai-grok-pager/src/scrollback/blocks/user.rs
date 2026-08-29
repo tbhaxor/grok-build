@@ -108,6 +108,18 @@ impl UserPromptBlock {
         self.text.clone()
     }
 
+    /// Session turn index shown as `/session-info` `Turn:`, hover `| N`, and `/jump N`.
+    ///
+    /// The shell stamps [`Self::prompt_index`] before incrementing at turn start;
+    /// session-info reads the post-increment `turn_index`. Adding 1 matches that
+    /// field. Interjections are not real turns and have no index.
+    pub fn display_turn_number(&self) -> Option<usize> {
+        if self.is_interjection {
+            return None;
+        }
+        self.prompt_index.map(|i| i + 1)
+    }
+
     pub fn bash(text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
@@ -864,6 +876,21 @@ mod tests {
         };
         assert_eq!(prefix_span.style.fg, expected_fg);
         assert!(!prefix_span.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn display_turn_number_is_prompt_index_plus_one() {
+        let mut block = UserPromptBlock::new("hello");
+        assert_eq!(block.display_turn_number(), None);
+        block.prompt_index = Some(11);
+        assert_eq!(block.display_turn_number(), Some(12));
+    }
+
+    #[test]
+    fn interjection_has_no_display_turn_number() {
+        let mut block = UserPromptBlock::interjection("steer");
+        block.prompt_index = Some(3);
+        assert_eq!(block.display_turn_number(), None);
     }
 
     #[test]

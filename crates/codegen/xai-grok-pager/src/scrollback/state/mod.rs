@@ -68,6 +68,10 @@ pub struct ScrollbackState {
     /// Pushed by `finish_running_with_time`, drained by `tick()` on expiry.
     flashing: Vec<EntryId>,
 
+    /// Successful `/jump` locate flash: the landed prompt and when it started.
+    /// Painted as a fading wash; demands ticks until it expires.
+    jump_flash: Option<(EntryId, Instant)>,
+
     /// Set of entry IDs with potentially stale cached heights.
     /// Used for incremental layout updates: only these entries need height recomputation.
     dirty_heights: HashSet<EntryId>,
@@ -244,6 +248,7 @@ impl ScrollbackState {
             next_id: 1, // Start at 1 so 0 can be a sentinel
             running: HashSet::new(),
             flashing: Vec::new(),
+            jump_flash: None,
             dirty_heights: HashSet::new(),
             committed: HashSet::new(),
             commit_scan_cursor: 0,
@@ -469,6 +474,20 @@ impl ScrollbackState {
             self.flashing = still_flashing;
         }
 
+        if let Some((id, started)) = self.jump_flash {
+            let expired = started.elapsed().as_millis() >= JUMP_FLASH_DURATION_MS as u128;
+            let visible = self
+                .entries
+                .get_index_of(&id)
+                .is_some_and(|idx| self.entry_index_in_viewport(idx));
+            if visible || expired {
+                needs_redraw = true;
+            }
+            if expired || !self.entries.contains_key(&id) {
+                self.jump_flash = None;
+            }
+        }
+
         needs_redraw
     }
 
@@ -502,6 +521,33 @@ impl ScrollbackState {
     /// Use this to decide whether to start the animation timer.
     pub fn needs_animation(&self) -> bool {
         !self.running.is_empty() && self.any_running_in_viewport()
+    }
+
+    /// True while a `/jump` locate flash is still showing.
+    /// Drives a slow tick so the wash expires without a 30fps redraw storm.
+    pub fn has_jump_flash(&self) -> bool {
+        self.jump_flash.is_some()
+    }
+
+    /// Start the `/jump` locate flash on the currently selected entry.
+    pub fn start_jump_flash(&mut self) {
+        let Some(idx) = self.selected else {
+            return;
+        };
+        let Some((&id, _)) = self.entries.get_index(idx) else {
+            return;
+        };
+        self.jump_flash = Some((id, Instant::now()));
+    }
+
+    /// Visible `/jump` flash: entry index and elapsed fraction in `0.0..=1.0`.
+    /// `None` when idle, expired, or the target is off-screen.
+    pub fn jump_flash_progress(&self) -> Option<(usize, f32)> {
+        let (id, started) = self.jump_flash?;
+        let idx = self.entries.get_index_of(&id)?;
+        let elapsed = started.elapsed().as_millis() as f32;
+        let t = (elapsed / JUMP_FLASH_DURATION_MS as f32).clamp(0.0, 1.0);
+        Some((idx, t))
     }
 
     /// Get the current animation tick value.
@@ -1041,6 +1087,7 @@ impl ScrollbackState {
         self.entries.clear();
         self.running.clear();
         self.flashing.clear();
+        self.jump_flash = None;
         self.dirty_heights.clear();
         self.committed.clear();
         self.expanded_groups.clear();
@@ -2609,6 +2656,32 @@ mod tests {
         assert!(state.flashing.is_empty(), "expired flash is drained");
         assert!(!state.needs_animation(), "nothing left to animate");
         assert!(!state.tick(), "and ticks stop redrawing");
+    }
+
+    #[test]
+    fn jump_flash_demands_ticks_then_expires() {
+        let mut state = ScrollbackState::new();
+        state.push_block(user_block("Q1"));
+        state.prepare_layout(80, 10);
+        assert!(state.jump_to_display_turn(1));
+        state.start_jump_flash();
+        assert!(state.jump_flash_progress().is_some());
+        assert!(state.has_jump_flash());
+        assert!(
+            !state.needs_animation(),
+            "jump flash must not start the 30fps running-tool loop"
+        );
+        assert!(state.tick());
+
+        std::thread::sleep(std::time::Duration::from_millis(
+            JUMP_FLASH_DURATION_MS + 50,
+        ));
+        assert!(
+            state.tick(),
+            "one final repaint when the jump flash expires"
+        );
+        assert!(state.jump_flash_progress().is_none());
+        assert!(!state.needs_animation());
     }
 
     /// Rewound/removed entries can't strand ids in the flash list.

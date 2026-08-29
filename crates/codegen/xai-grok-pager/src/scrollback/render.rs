@@ -218,8 +218,9 @@ pub struct SelectedEntryArea {
 ///   `None` (harnesses without a layout pass) falls back to the verb label walk's own run classification.
 ///   It also falls back to the plain "N more" / "N tool calls & thoughts" truncation text.
 /// - `cwd`: Session/worktree cwd used for path-aware measurement and paint.
-/// - `turns`: Conversation turns (for user-prompt timestamp hover turn numbers).
-///   `None` in harnesses that don't carry timeline state.
+/// - `turns`: Unused. Hover turn numbers come from the shell-stamped prompt
+///   index on each user prompt (same as `/session-info` `Turn:`). Kept so
+///   existing call sites do not churn.
 ///
 /// # Panics
 /// Debug-asserts if `entry_layouts_cache.len() != entries.len()`.
@@ -244,7 +245,7 @@ pub fn render_scrolled_entries_with_scratch(
     media_paths: &[std::path::PathBuf],
     group_spans: Option<(&[GroupSpan], usize)>,
     cwd: Option<&std::path::Path>,
-    turns: Option<&[Turn]>,
+    _turns: Option<&[Turn]>,
 ) -> ScrollRenderResult {
     render_scrolled_entries_with_selection_boundaries(
         buf,
@@ -264,7 +265,7 @@ pub fn render_scrolled_entries_with_scratch(
         media_paths,
         group_spans,
         cwd,
-        turns,
+        _turns,
     )
     .result
 }
@@ -288,7 +289,7 @@ pub(crate) fn render_scrolled_entries_with_selection_boundaries(
     media_paths: &[std::path::PathBuf],
     group_spans: Option<(&[GroupSpan], usize)>,
     cwd: Option<&std::path::Path>,
-    turns: Option<&[Turn]>,
+    _turns: Option<&[Turn]>,
 ) -> ScrollRenderResultWithBoundaries {
     if entries.is_empty() || viewport.width == 0 || viewport.height == 0 {
         return ScrollRenderResultWithBoundaries::default();
@@ -431,18 +432,8 @@ pub(crate) fn render_scrolled_entries_with_selection_boundaries(
         } else {
             None
         };
-        // 1-based turn ordinal for user-prompt timestamp hover (`| N`).
-        let turn_number = entry
-            .block
-            .is_user_prompt()
-            .then(|| {
-                turns.and_then(|ts| {
-                    ts.iter()
-                        .position(|t| t.prompt_index == logical_idx)
-                        .map(|i| i + 1)
-                })
-            })
-            .flatten();
+        // Same number `/session-info` prints as `Turn:` (shell turn_index).
+        let turn_number = entry.block.display_turn_number();
         let renderer = EntryRenderer::new(entry, theme)
             .with_appearance_ref(appearance)
             .with_tick(tick)

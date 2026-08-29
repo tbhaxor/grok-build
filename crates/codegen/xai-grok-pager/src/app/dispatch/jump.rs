@@ -29,10 +29,18 @@ pub(super) fn dispatch_jump_show_picker(app: &mut AppView) -> Vec<Effect> {
         selected: agent.scrollback.selected(),
         follow_mode: agent.scrollback.is_follow_mode(),
     };
-    // Open on the turn currently at the viewport top (rows are oldest-first, so the row index is the turn index)
+    // Open on the session-info turn currently at the viewport top (picker
+    // rows are keyed by that index, not raw scrollback position).
     let selected = agent
         .scrollback
-        .active_turn_for_viewport()
+        .active_display_turn()
+        .and_then(|display| entries.iter().position(|e| e.turn_idx + 1 == display))
+        .or_else(|| {
+            let sb_idx = agent.scrollback.active_turn_for_viewport()?;
+            let prompt_idx = agent.scrollback.turn(sb_idx)?.prompt_index;
+            let id = agent.scrollback.iter_entries().nth(prompt_idx)?.0;
+            entries.iter().position(|e| e.prompt_entry_id == id)
+        })
         .unwrap_or(entries.len() - 1)
         .min(entries.len() - 1);
 
@@ -63,6 +71,8 @@ pub(super) fn dispatch_jump_picker_select(app: &mut AppView, prompt_id: EntryId)
     // Restore the captured viewport so a failed jump never strands the transcript at the last preview scroll
     if !agent.scrollback.jump_to_entry(prompt_id) {
         agent.restore_jump_viewport(js.restore);
+    } else {
+        agent.scrollback.start_jump_flash();
     }
     vec![]
 }
@@ -91,10 +101,11 @@ pub(super) fn dispatch_jump_to_turn(app: &mut AppView, turn_number: usize) -> Ve
     // A leftover picker would still own keys/wheel after a direct jump.
     agent.dismiss_jump_picker();
 
-    // Display is 1-based (matches `/jump` ordinals and the hover timestamp).
-    let turn_idx = turn_number.saturating_sub(1);
-    if turn_number == 0 || !agent.scrollback.jump_to_turn(turn_idx) {
+    // Display is 1-based and matches `/session-info` / hover (shell prompt index).
+    if !agent.scrollback.jump_to_display_turn(turn_number) {
         app.show_toast(&format!("Turn {turn_number} doesn't exist"));
+    } else {
+        agent.scrollback.start_jump_flash();
     }
     vec![]
 }

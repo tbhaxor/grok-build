@@ -5798,6 +5798,14 @@ impl AppView {
                 if fast {
                     return TickDemand::Fast;
                 }
+                if agent.scrollback.has_jump_flash()
+                    || agent
+                        .subagent_views
+                        .values()
+                        .any(|c| c.scrollback.has_jump_flash())
+                {
+                    return TickDemand::Slow;
+                }
                 if cfg!(target_os = "macos")
                     && (agent.needs_link_modifier_poll()
                         || agent

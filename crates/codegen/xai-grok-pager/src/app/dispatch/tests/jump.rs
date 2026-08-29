@@ -419,6 +419,10 @@ fn jump_to_turn_jumps_to_1_based_number() {
     assert_eq!(agent.scrollback.current_turn(), Some(0));
     assert_eq!(agent.scrollback.selected(), Some(0));
     assert!(agent.toast.is_none(), "in-range goto must not toast");
+    assert!(
+        agent.scrollback.jump_flash_progress().is_some(),
+        "successful /jump flashes the landed prompt"
+    );
 }
 
 #[test]
@@ -449,6 +453,10 @@ fn jump_to_turn_out_of_bounds_toasts() {
     );
     assert_eq!(agent.scrollback.selected(), before_selected);
     assert_eq!(agent.scrollback.scroll_offset(), before_offset);
+    assert!(
+        agent.scrollback.jump_flash_progress().is_none(),
+        "failed /jump must not flash"
+    );
 }
 
 #[test]

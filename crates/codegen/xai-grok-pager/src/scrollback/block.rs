@@ -799,6 +799,14 @@ impl RenderBlock {
         }
     }
 
+    /// 1-based session turn ordinal for user-prompt chrome (`/jump`, hover).
+    pub fn display_turn_number(&self) -> Option<usize> {
+        match self {
+            RenderBlock::UserPrompt(b) => b.display_turn_number(),
+            _ => None,
+        }
+    }
+
     pub fn is_user_prompt(&self) -> bool {
         matches!(self, RenderBlock::UserPrompt(_))
     }

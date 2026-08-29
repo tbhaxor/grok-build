@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style};
 use ratatui::widgets::StatefulWidget;
 use std::ops::Range;
 
@@ -713,7 +713,7 @@ impl ScrollbackPane {
             let scratch_area = Rect::new(0, 0, area.width, render_height);
 
             // Render full header to scratch
-            let turn_number = state.turn_containing(entry_idx).map(|i| i + 1);
+            let turn_number = entry.block.display_turn_number();
             let mut lines = Self::render_entry_with_ctx_static(
                 entry,
                 &ctx,
@@ -750,7 +750,7 @@ impl ScrollbackPane {
             lines
         } else {
             // No clipping needed; render directly with max_lines
-            let turn_number = state.turn_containing(entry_idx).map(|i| i + 1);
+            let turn_number = entry.block.display_turn_number();
             Self::render_entry_with_ctx_static(
                 entry,
                 &ctx,
@@ -913,11 +913,10 @@ impl ScrollbackPane {
                     && mx >= content_area.x + content_area.width.saturating_sub(10)
                     && mx < content_area.x + content_area.width
             });
-            // Sticky headers are user prompts only; include the 1-based turn
-            // number on hover (matches EntryRenderer for in-flow prompts).
-            let turn = ts_hovered
-                .then(|| turn_number.filter(|_| entry.block.is_user_prompt()))
-                .flatten();
+            // Sticky headers are user prompts only; prefer the shell-stamped
+            // prompt index so hover matches `/session-info` (interjections
+            // must not shift later ordinals).
+            let turn = ts_hovered.then_some(turn_number).flatten();
             let ts_str =
                 crate::scrollback::wrappers::format_message_timestamp(ts, ts_hovered, turn);
             let ts_width = ts_str.len() as u16;
@@ -1205,6 +1204,7 @@ impl ScrollbackPane {
 
                     content_output.output.selection_box = Some(sel_box);
                     content_output.output.selected_entry_area = selected_entry_rect;
+                    paint_jump_flash(buf, content_area, state, theme);
                     return content_output;
                 }
             }
@@ -1223,10 +1223,44 @@ impl ScrollbackPane {
                 .with_bottom_clipped(bottom_clipped);
 
             content_output.output.selection_box = Some(sel_box);
+            paint_jump_flash(buf, content_area, state, theme);
             return content_output;
         }
 
+        paint_jump_flash(buf, content_area, state, theme);
         content_output
+    }
+}
+
+/// Invert the landed `/jump` prompt so it reads as a locate flash:
+/// light theme → black bg + white text; dark theme → light bg + black text.
+fn paint_jump_flash(buf: &mut Buffer, content_area: Rect, state: &ScrollbackState, theme: &Theme) {
+    let Some((flash_idx, _)) = state.jump_flash_progress() else {
+        return;
+    };
+    let Some((flash_area, _, _)) = state.entry_screen_area(flash_idx, content_area) else {
+        return;
+    };
+    let light = !theme.is_dark();
+    let (flash_bg, flash_fg) = if light {
+        (Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255))
+    } else {
+        (Color::Rgb(255, 255, 255), Color::Rgb(0, 0, 0))
+    };
+    let y0 = flash_area.y.max(content_area.y);
+    let y1 = (flash_area.y + flash_area.height).min(content_area.y + content_area.height);
+    let x0 = flash_area.x;
+    let x1 = flash_area.x + flash_area.width;
+    if x1 <= x0 || y1 <= y0 {
+        return;
+    }
+    for y in y0..y1 {
+        for x in x0..x1 {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.bg = flash_bg;
+                cell.fg = flash_fg;
+            }
+        }
     }
 }
 
