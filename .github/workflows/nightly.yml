@@ -149,7 +149,12 @@ jobs:
           short_sha="$(git rev-parse --short HEAD)"
           date_utc="$(date -u +%Y%m%d)"
           artifact="grok-${TARGET}"
-          versioned="grok-${TARGET}-${date_utc}-${short_sha}"
+          # Prefer the binary's stamped SemVer (upstream version, plus appended `tbhaxor.<short-sha>`).
+          stamped="$("${src}" --version | awk 'NR==1 { print $2 }')"
+          if [ -z "${stamped}" ]; then
+            stamped="${date_utc}-${short_sha}"
+          fi
+          versioned="grok-${TARGET}-${stamped}"
 
           cp "$src" "${artifact}"
           cp "$src" "${versioned}"
@@ -162,13 +167,14 @@ jobs:
             echo "versioned=${versioned}"
             echo "short_sha=${short_sha}"
             echo "date_utc=${date_utc}"
+            echo "stamped=${stamped}"
           } >> "${GITHUB_OUTPUT}"
 
       - name: Upload build artifacts
         if: ${{ github.event_name != 'workflow_dispatch' || !inputs.skip_build }}
         uses: actions/upload-artifact@v7
         with:
-          name: grok-${{ env.TARGET }}-${{ steps.package.outputs.date_utc }}-${{ steps.package.outputs.short_sha }}
+          name: grok-${{ env.TARGET }}-${{ steps.package.outputs.stamped }}
           path: |
             ${{ steps.package.outputs.artifact }}
             ${{ steps.package.outputs.versioned }}

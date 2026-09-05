@@ -14,17 +14,20 @@ pub const VERSION: &str = match option_env!("GROK_VERSION") {
 /// The release pipeline always injects `GROK_VERSION`; without it the build is from source.
 pub const IS_DEV_BUILD: bool = option_env!("GROK_VERSION").is_none();
 
-/// Runtime-injected `"<version> (<shortcommit>)"` string.
-/// Only the release binary stamps the commit in its own build.rs and injects it here at startup, so the lib crates don't recompile on every commit.
+/// Runtime-injected user-facing version string.
+/// Official builds stamp `"<version> (<shortcommit>)"`. This fork keeps that
+/// (and any existing `+build` metadata) and appends `tbhaxor.<short-sha>`,
+/// e.g. `"1.0.16+tbhaxor.abc1234 (deadbeef0123)"`. Only the binary injects it
+/// at startup so lib crates don't recompile on every commit.
 static FULL_VERSION: OnceLock<&'static str> = OnceLock::new();
 
-/// Inject the binary's stamped `"<version> (<shortcommit>)"` string.
+/// Inject the binary's stamped version string.
 /// Idempotent: the first set wins, repeats are ignored.
 pub fn set_full_version(v: &'static str) {
     let _ = FULL_VERSION.set(v);
 }
 
-/// The injected version-with-commit string, or plain [`VERSION`] when no binary has called [`set_full_version`] (e.g. lib tests, dev harnesses).
+/// The injected version string, or plain [`VERSION`] when no binary has called [`set_full_version`] (e.g. lib tests, dev harnesses).
 pub fn full_version() -> &'static str {
     FULL_VERSION.get().copied().unwrap_or(VERSION)
 }
@@ -47,9 +50,31 @@ pub fn display_version(channel_label: &str) -> String {
     format!("{}{}", VERSION, channel_label)
 }
 
-/// Like [`display_version`], but for the full `"0.2.5 (abc1234)"` string.
+/// Like [`display_version`], but for the binary-stamped string
+/// (`"0.2.5 (abc1234)"` or `"1.0.16+tbhaxor.abc1234 (deadbeef0123)"`).
 pub fn display_version_with_commit(version_with_commit: &str, channel_label: &str) -> String {
     format!("{}{}", version_with_commit, channel_label)
+}
+
+/// Append `fork_id.short_sha` to SemVer build metadata without replacing any
+/// existing `+…` identifiers. A previous `fork_id[.sha]` pair is refreshed
+/// in place so rebuilds do not stack `tbhaxor.old.tbhaxor.new`.
+///
+/// The pager-bin `build.rs` stamp must stay in lockstep with this.
+pub fn append_fork_build_meta(version: &str, fork_id: &str, short_sha: &str) -> String {
+    let (core, build) = match version.split_once('+') {
+        Some((core, build)) => (core, Some(build)),
+        None => (version, None),
+    };
+    let mut parts: Vec<&str> = build
+        .map(|b| b.split('.').filter(|p| !p.is_empty()).collect())
+        .unwrap_or_default();
+    if let Some(i) = parts.iter().position(|p| *p == fork_id) {
+        parts.truncate(i);
+    }
+    parts.push(fork_id);
+    parts.push(short_sha);
+    format!("{core}+{}", parts.join("."))
 }
 
 #[cfg(test)]
@@ -69,6 +94,16 @@ mod tests {
                 " [alpha]",
                 "0.1.220-alpha.2 (def0) [alpha]",
             ),
+            (
+                "1.0.16+tbhaxor.abc1234 (deadbeef0123)",
+                " [stable]",
+                "1.0.16+tbhaxor.abc1234 (deadbeef0123) [stable]",
+            ),
+            (
+                "1.0.16+ci.1.tbhaxor.abc1234 (deadbeef0123)",
+                "",
+                "1.0.16+ci.1.tbhaxor.abc1234 (deadbeef0123)",
+            ),
         ];
         for (vwc, label, expected) in cases {
             assert_eq!(
@@ -82,6 +117,26 @@ mod tests {
         // display_version uses compiled VERSION, so verify only that the label appends
         assert_eq!(display_version(""), VERSION);
         assert!(display_version(" [stable]").ends_with("[stable]"));
+    }
+
+    #[test]
+    fn append_fork_build_meta_adds_or_extends_without_replacing() {
+        assert_eq!(
+            append_fork_build_meta("1.0.16", "tbhaxor", "abc1234"),
+            "1.0.16+tbhaxor.abc1234"
+        );
+        assert_eq!(
+            append_fork_build_meta("1.0.16+ci.1", "tbhaxor", "abc1234"),
+            "1.0.16+ci.1.tbhaxor.abc1234"
+        );
+        assert_eq!(
+            append_fork_build_meta("1.0.16+ci.1.tbhaxor.oldsha", "tbhaxor", "abc1234"),
+            "1.0.16+ci.1.tbhaxor.abc1234"
+        );
+        assert_eq!(
+            append_fork_build_meta("1.0.16+tbhaxor.oldsha", "tbhaxor", "abc1234"),
+            "1.0.16+tbhaxor.abc1234"
+        );
     }
 
     #[test]
