@@ -149,7 +149,7 @@ jobs:
           short_sha="$(git rev-parse --short HEAD)"
           date_utc="$(date -u +%Y%m%d)"
           artifact="grok-${TARGET}"
-          # Prefer the binary's stamped SemVer (upstream version, plus appended `tbhaxor.<short-sha>`).
+          # Prefer the binary's stamped SemVer (upstream version, plus appended `tbhaxor-<short-sha>`).
           stamped="$("${src}" --version | awk 'NR==1 { print $2 }')"
           if [ -z "${stamped}" ]; then
             stamped="${date_utc}-${short_sha}"

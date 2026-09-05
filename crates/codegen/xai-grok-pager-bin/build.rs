@@ -27,9 +27,9 @@ fn main() {
     }
 
     // Upstream stamp is `"<version> (<12-char-sha>)"`. This fork keeps that
-    // (and any existing `+build` metadata) and appends `tbhaxor.<short-sha>`.
-    // `1.0.16`            → `1.0.16+tbhaxor.abc1234 (deadbeef0123)`
-    // `1.0.16+ci.1`       → `1.0.16+ci.1.tbhaxor.abc1234 (deadbeef0123)`
+    // (and any existing `+build` metadata) and appends `tbhaxor-<short-sha>`.
+    // `1.0.16`            → `1.0.16+tbhaxor-abc1234 (deadbeef0123)`
+    // `1.0.16+ci.1`       → `1.0.16+ci.1.tbhaxor-abc1234 (deadbeef0123)`
     let version = std::env::var("GROK_VERSION")
         .or_else(|_| std::env::var("CARGO_PKG_VERSION"))
         .unwrap_or_else(|_| "0.0.0".to_string());
@@ -47,21 +47,37 @@ fn main() {
     println!("cargo:rustc-env=VERSION_WITH_COMMIT={stamped} ({commit})");
 }
 
-/// Append `fork_id.short_sha` to SemVer build metadata without replacing any
-/// existing `+…` identifiers. A previous `tbhaxor[.sha]` pair is refreshed
-/// in place so rebuilds do not stack `tbhaxor.old.tbhaxor.new`.
+/// Append `fork_id-short_sha` as one SemVer build identifier (hyphen, not
+/// `.`, so it stays a single token). Existing `+…` identifiers are kept.
+/// A previous `tbhaxor-<sha>` token — or the legacy `tbhaxor.sha` pair —
+/// is refreshed in place so rebuilds do not stack.
 fn append_fork_build_meta(version: &str, fork_id: &str, short_sha: &str) -> String {
+    let token = format!("{fork_id}-{short_sha}");
+    let prefix = format!("{fork_id}-");
     let (core, build) = match version.split_once('+') {
         Some((core, build)) => (core, Some(build)),
         None => (version, None),
     };
-    let mut parts: Vec<&str> = build
-        .map(|b| b.split('.').filter(|p| !p.is_empty()).collect())
+    let mut parts: Vec<String> = build
+        .map(|b| {
+            b.split('.')
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
-    if let Some(i) = parts.iter().position(|p| *p == fork_id) {
-        parts.truncate(i);
+    if let Some(i) = parts
+        .iter()
+        .position(|p| p == fork_id || p.starts_with(&prefix))
+    {
+        // Legacy `tbhaxor.<sha>` used two identifiers; drop both.
+        let end = if parts[i] == fork_id && i + 1 < parts.len() {
+            i + 1
+        } else {
+            i
+        };
+        parts.drain(i..=end);
     }
-    parts.push(fork_id);
-    parts.push(short_sha);
+    parts.push(token);
     format!("{core}+{}", parts.join("."))
 }

@@ -16,8 +16,8 @@ pub const IS_DEV_BUILD: bool = option_env!("GROK_VERSION").is_none();
 
 /// Runtime-injected user-facing version string.
 /// Official builds stamp `"<version> (<shortcommit>)"`. This fork keeps that
-/// (and any existing `+build` metadata) and appends `tbhaxor.<short-sha>`,
-/// e.g. `"1.0.16+tbhaxor.abc1234 (deadbeef0123)"`. Only the binary injects it
+/// (and any existing `+build` metadata) and appends `tbhaxor-<short-sha>`,
+/// e.g. `"1.0.16+tbhaxor-abc1234 (deadbeef0123)"`. Only the binary injects it
 /// at startup so lib crates don't recompile on every commit.
 static FULL_VERSION: OnceLock<&'static str> = OnceLock::new();
 
@@ -51,29 +51,45 @@ pub fn display_version(channel_label: &str) -> String {
 }
 
 /// Like [`display_version`], but for the binary-stamped string
-/// (`"0.2.5 (abc1234)"` or `"1.0.16+tbhaxor.abc1234 (deadbeef0123)"`).
+/// (`"0.2.5 (abc1234)"` or `"1.0.16+tbhaxor-abc1234 (deadbeef0123)"`).
 pub fn display_version_with_commit(version_with_commit: &str, channel_label: &str) -> String {
     format!("{}{}", version_with_commit, channel_label)
 }
 
-/// Append `fork_id.short_sha` to SemVer build metadata without replacing any
-/// existing `+…` identifiers. A previous `fork_id[.sha]` pair is refreshed
-/// in place so rebuilds do not stack `tbhaxor.old.tbhaxor.new`.
+/// Append `fork_id-short_sha` as one SemVer build identifier (hyphen, not
+/// `.`, so it stays a single token). Existing `+…` identifiers are kept.
+/// A previous `fork_id-<sha>` token — or the legacy `fork_id.sha` pair —
+/// is refreshed in place so rebuilds do not stack.
 ///
 /// The pager-bin `build.rs` stamp must stay in lockstep with this.
 pub fn append_fork_build_meta(version: &str, fork_id: &str, short_sha: &str) -> String {
+    let token = format!("{fork_id}-{short_sha}");
+    let prefix = format!("{fork_id}-");
     let (core, build) = match version.split_once('+') {
         Some((core, build)) => (core, Some(build)),
         None => (version, None),
     };
-    let mut parts: Vec<&str> = build
-        .map(|b| b.split('.').filter(|p| !p.is_empty()).collect())
+    let mut parts: Vec<String> = build
+        .map(|b| {
+            b.split('.')
+                .filter(|p| !p.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
         .unwrap_or_default();
-    if let Some(i) = parts.iter().position(|p| *p == fork_id) {
-        parts.truncate(i);
+    if let Some(i) = parts
+        .iter()
+        .position(|p| p == fork_id || p.starts_with(&prefix))
+    {
+        // Legacy `tbhaxor.<sha>` used two identifiers; drop both.
+        let end = if parts[i] == fork_id && i + 1 < parts.len() {
+            i + 1
+        } else {
+            i
+        };
+        parts.drain(i..=end);
     }
-    parts.push(fork_id);
-    parts.push(short_sha);
+    parts.push(token);
     format!("{core}+{}", parts.join("."))
 }
 
@@ -95,14 +111,14 @@ mod tests {
                 "0.1.220-alpha.2 (def0) [alpha]",
             ),
             (
-                "1.0.16+tbhaxor.abc1234 (deadbeef0123)",
+                "1.0.16+tbhaxor-abc1234 (deadbeef0123)",
                 " [stable]",
-                "1.0.16+tbhaxor.abc1234 (deadbeef0123) [stable]",
+                "1.0.16+tbhaxor-abc1234 (deadbeef0123) [stable]",
             ),
             (
-                "1.0.16+ci.1.tbhaxor.abc1234 (deadbeef0123)",
+                "1.0.16+ci.1.tbhaxor-abc1234 (deadbeef0123)",
                 "",
-                "1.0.16+ci.1.tbhaxor.abc1234 (deadbeef0123)",
+                "1.0.16+ci.1.tbhaxor-abc1234 (deadbeef0123)",
             ),
         ];
         for (vwc, label, expected) in cases {
@@ -123,19 +139,19 @@ mod tests {
     fn append_fork_build_meta_adds_or_extends_without_replacing() {
         assert_eq!(
             append_fork_build_meta("1.0.16", "tbhaxor", "abc1234"),
-            "1.0.16+tbhaxor.abc1234"
+            "1.0.16+tbhaxor-abc1234"
         );
         assert_eq!(
             append_fork_build_meta("1.0.16+ci.1", "tbhaxor", "abc1234"),
-            "1.0.16+ci.1.tbhaxor.abc1234"
+            "1.0.16+ci.1.tbhaxor-abc1234"
         );
         assert_eq!(
-            append_fork_build_meta("1.0.16+ci.1.tbhaxor.oldsha", "tbhaxor", "abc1234"),
-            "1.0.16+ci.1.tbhaxor.abc1234"
+            append_fork_build_meta("1.0.16+ci.1.tbhaxor-oldsha", "tbhaxor", "abc1234"),
+            "1.0.16+ci.1.tbhaxor-abc1234"
         );
         assert_eq!(
             append_fork_build_meta("1.0.16+tbhaxor.oldsha", "tbhaxor", "abc1234"),
-            "1.0.16+tbhaxor.abc1234"
+            "1.0.16+tbhaxor-abc1234"
         );
     }
 
