@@ -276,7 +276,6 @@ pub(crate) async fn fetch_lanes(
     }
 }
 
-/// Local entries are inserted first so remote entries win on collision (same session_id).
 /// Local results are optionally filtered by `query` (case-insensitive substring on summary, display title, and session ID).
 /// Remote results are filtered by normalized repo URL when `local_repo_urls` is non-empty.
 /// Results are sorted by [`effective_sort_time`] descending and truncated to `limit`.
@@ -491,6 +490,8 @@ mod tests {
                 id: acp::SessionId::new(id),
                 cwd: "/test".into(),
             },
+            agent_id: None,
+            attempt_id: None,
             cwd_generation: 0,
             previous_cwd: None,
             pending_cwd_switch_reminder: None,
