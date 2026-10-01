@@ -1,14 +1,11 @@
-# Nightly: merge upstream (xai-org/grok-build), build the CLI, upload artifacts,
-# and push the merged main back to this fork.
-#
-# Manual run: Actions → Nightly → Run workflow
+# Disabled. This workflow used to merge upstream, build the CLI, upload
+# artifacts, and push main. The schedule is removed so it does not run.
+# Re-enable by restoring the cron under `on:` and running
+# `gh workflow enable nightly.yml`.
 
 name: Nightly
 
 on:
-  schedule:
-    # Every day at 06:00 UTC
-    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       skip_push:
