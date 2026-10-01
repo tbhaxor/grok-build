@@ -95,7 +95,7 @@ pub(crate) fn cwd_match_keys(cwd: &str) -> Vec<String> {
     let mut keys = vec![trimmed.to_owned()];
     if let Ok(real) = dunce::canonicalize(trimmed) {
         let real = real.to_string_lossy().trim_end_matches('/').to_owned();
-        if real != keys[0] {
+        if keys.first().is_none_or(|k| k != &real) {
             keys.push(real);
         }
     }
@@ -484,6 +484,20 @@ mod tests {
     use agent_client_protocol as acp;
     use chrono::{TimeZone, Utc};
 
+    fn first<T: std::fmt::Debug>(xs: &[T]) -> &T {
+        let Some(x) = xs.first() else {
+            panic!("expected non-empty: {xs:?}");
+        };
+        x
+    }
+
+    fn at<T: std::fmt::Debug>(xs: &[T], i: usize) -> &T {
+        let Some(x) = xs.get(i) else {
+            panic!("expected index {i}: {xs:?}");
+        };
+        x
+    }
+
     fn make_summary(id: &str, title: &str, updated: &str) -> Summary {
         Summary {
             info: Info {
@@ -524,9 +538,10 @@ mod tests {
             generated_title: None,
             title_is_manual: false,
             worktree_label: None,
-            agent_name: None,
+            agent: Default::default(),
             sandbox_profile: None,
             reasoning_effort: None,
+            context_window: None,
             last_turn_summary: None,
             last_turn_summary_prompt_id: None,
             last_recap: None,
@@ -662,8 +677,8 @@ mod tests {
         let remote = vec![make_remote("s1", "remote title", "2026-03-01T00:00:00Z")];
         let merged = merge(remote, local, None, &[], 20);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].summary, "remote title");
-        assert_eq!(merged[0].source, "both");
+        assert_eq!(first(&merged).summary, "remote title");
+        assert_eq!(first(&merged).source, "both");
     }
 
     #[test]
@@ -715,23 +730,26 @@ mod tests {
         let remote = vec![make_remote("s1", "remote title", "2026-03-01T00:00:00Z")];
         let merged = merge(remote, local, None, &[], 20);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].source, "both");
-        assert_eq!(merged[0].summary, "remote title");
-        assert_eq!(merged[0].branch.as_deref(), Some("feature/branch"));
-        assert_eq!(merged[0].repo_name.as_deref(), Some("repo"));
-        assert_eq!(merged[0].worktree_label.as_deref(), Some("my-label"));
+        assert_eq!(first(&merged).source, "both");
+        assert_eq!(first(&merged).summary, "remote title");
+        assert_eq!(first(&merged).branch.as_deref(), Some("feature/branch"));
+        assert_eq!(first(&merged).repo_name.as_deref(), Some("repo"));
+        assert_eq!(first(&merged).worktree_label.as_deref(), Some("my-label"));
         // Local-only git enrichment is inherited onto the merged "both" row
         // This is the path SSH/remote agents rely on for repo grouping
-        assert_eq!(merged[0].git_root_dir.as_deref(), Some("/home/user/repo"));
         assert_eq!(
-            merged[0].git_remotes,
+            first(&merged).git_root_dir.as_deref(),
+            Some("/home/user/repo")
+        );
+        assert_eq!(
+            first(&merged).git_remotes,
             vec!["git@github.com:example/repo.git"]
         );
         assert_eq!(
-            merged[0].source_workspace_dir.as_deref(),
+            first(&merged).source_workspace_dir.as_deref(),
             Some("/home/user/src")
         );
-        assert_eq!(merged[0].session_kind.as_deref(), Some("worktree"));
+        assert_eq!(first(&merged).session_kind.as_deref(), Some("worktree"));
     }
 
     #[test]
@@ -739,7 +757,7 @@ mod tests {
         let local = vec![make_summary("s1", "only on disk", "2026-03-01T00:00:00Z")];
         let merged = merge(Vec::new(), local, None, &[], 20);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].source, "local");
+        assert_eq!(first(&merged).source, "local");
     }
 
     /// `last_turn_summary` is carried into the session list from local `summary.json` (the registry has no copy of it).
@@ -749,7 +767,7 @@ mod tests {
         s.last_turn_summary = Some("Fixed the parser".into());
         let merged = merge(Vec::new(), vec![s], None, &[], 20);
         assert_eq!(
-            merged[0].last_turn_summary.as_deref(),
+            first(&merged).last_turn_summary.as_deref(),
             Some("Fixed the parser")
         );
 
@@ -757,9 +775,9 @@ mod tests {
         s.last_turn_summary = Some("Fixed the parser".into());
         let remote = vec![make_remote("s1", "remote title", "2026-03-01T00:00:00Z")];
         let merged = merge(remote, vec![s], None, &[], 20);
-        assert_eq!(merged[0].source, "both");
+        assert_eq!(first(&merged).source, "both");
         assert_eq!(
-            merged[0].last_turn_summary.as_deref(),
+            first(&merged).last_turn_summary.as_deref(),
             Some("Fixed the parser")
         );
     }
@@ -770,7 +788,7 @@ mod tests {
         s.last_recap = Some("Where we left off: auth refactor".into());
         let merged = merge(Vec::new(), vec![s], None, &[], 20);
         assert_eq!(
-            merged[0].last_recap.as_deref(),
+            first(&merged).last_recap.as_deref(),
             Some("Where we left off: auth refactor")
         );
 
@@ -778,9 +796,9 @@ mod tests {
         s.last_recap = Some("Where we left off: auth refactor".into());
         let remote = vec![make_remote("s1", "remote title", "2026-03-01T00:00:00Z")];
         let merged = merge(remote, vec![s], None, &[], 20);
-        assert_eq!(merged[0].source, "both");
+        assert_eq!(first(&merged).source, "both");
         assert_eq!(
-            merged[0].last_recap.as_deref(),
+            first(&merged).last_recap.as_deref(),
             Some("Where we left off: auth refactor")
         );
     }
@@ -793,9 +811,9 @@ mod tests {
             make_summary("mid", "mid", "2026-02-01T00:00:00Z"),
         ];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged[0].session_id, "new");
-        assert_eq!(merged[1].session_id, "mid");
-        assert_eq!(merged[2].session_id, "old");
+        assert_eq!(first(&merged).session_id, "new");
+        assert_eq!(at(&merged, 1).session_id, "mid");
+        assert_eq!(at(&merged, 2).session_id, "old");
     }
 
     #[test]
@@ -817,8 +835,8 @@ mod tests {
             ),
         ];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged[0].session_id, "recent_activity");
-        assert_eq!(merged[1].session_id, "stale_activity");
+        assert_eq!(first(&merged).session_id, "recent_activity");
+        assert_eq!(at(&merged, 1).session_id, "stale_activity");
     }
 
     #[test]
@@ -836,9 +854,9 @@ mod tests {
         ];
         let merged = merge(Vec::new(), local, None, &[], 20);
         // b: last_active 2026-06 (newest), c: updated 2026-03, a: updated 2026-01.
-        assert_eq!(merged[0].session_id, "b");
-        assert_eq!(merged[1].session_id, "c");
-        assert_eq!(merged[2].session_id, "a");
+        assert_eq!(first(&merged).session_id, "b");
+        assert_eq!(at(&merged, 1).session_id, "c");
+        assert_eq!(at(&merged, 2).session_id, "a");
     }
 
     #[test]
@@ -850,8 +868,8 @@ mod tests {
         let good = make_remote("good", "g", "2026-06-01T00:00:00Z");
         let merged = merge(vec![bad_active, good], Vec::new(), None, &[], 20);
         // bad_active falls back to updated_at 2026-07 (newest), so it sorts first
-        assert_eq!(merged[0].session_id, "bad_active");
-        assert_eq!(merged[1].session_id, "good");
+        assert_eq!(first(&merged).session_id, "bad_active");
+        assert_eq!(at(&merged, 1).session_id, "good");
     }
 
     #[test]
@@ -859,8 +877,8 @@ mod tests {
         let good = make_remote("good", "g", "2026-05-01T00:00:00Z");
         let bad = make_remote("bad", "b", "not-a-timestamp");
         let merged = merge(vec![bad, good], Vec::new(), None, &[], 20);
-        assert_eq!(merged[0].session_id, "good");
-        assert_eq!(merged[1].session_id, "bad");
+        assert_eq!(first(&merged).session_id, "good");
+        assert_eq!(at(&merged, 1).session_id, "bad");
     }
 
     #[test]
@@ -885,7 +903,7 @@ mod tests {
         ];
         let merged = merge(Vec::new(), local, Some(id), &[], 20);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].session_id, id);
+        assert_eq!(first(&merged).session_id, id);
 
         let prefix = merge(
             Vec::new(),
@@ -895,7 +913,7 @@ mod tests {
             20,
         );
         assert_eq!(prefix.len(), 1);
-        assert_eq!(prefix[0].session_id, id);
+        assert_eq!(first(&prefix).session_id, id);
     }
 
     #[test]
@@ -979,7 +997,7 @@ mod tests {
         let local_urls = vec!["github.com/org/repo".to_string()];
         let merged = merge(remote, Vec::new(), None, &local_urls, 20);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].session_id, "s1");
+        assert_eq!(first(&merged).session_id, "s1");
     }
 
     #[test]
@@ -1082,7 +1100,7 @@ mod tests {
         let merged = merge(remote, local, None, &[], 20);
         assert_eq!(merged.len(), 1);
         assert_eq!(
-            merged[0].last_active_at.as_deref(),
+            first(&merged).last_active_at.as_deref(),
             Some("2026-04-10T12:00:00+00:00")
         );
     }
@@ -1104,7 +1122,7 @@ mod tests {
         let merged = merge(remote, local, None, &[], 20);
         assert_eq!(merged.len(), 1);
         assert_eq!(
-            merged[0].last_active_at.as_deref(),
+            first(&merged).last_active_at.as_deref(),
             Some("2026-04-15T12:00:00Z")
         );
     }
@@ -1126,7 +1144,7 @@ mod tests {
         let merged = merge(remote, local, None, &[], 20);
         assert_eq!(merged.len(), 1);
         assert_eq!(
-            merged[0].last_active_at.as_deref(),
+            first(&merged).last_active_at.as_deref(),
             Some("2026-04-10T12:00:00+00:00")
         );
 
@@ -1146,7 +1164,7 @@ mod tests {
         let merged2 = merge(remote2, local2, None, &[], 20);
         assert_eq!(merged2.len(), 1);
         assert_eq!(
-            merged2[0].last_active_at.as_deref(),
+            first(&merged2).last_active_at.as_deref(),
             Some("2026-04-15T12:00:00Z")
         );
     }
@@ -1184,7 +1202,7 @@ mod tests {
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].summary, "Refactor auth middleware");
+        assert_eq!(first(&merged).summary, "Refactor auth middleware");
     }
 
     #[test]
@@ -1199,7 +1217,7 @@ mod tests {
             None,
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged[0].summary, "Fix deployment bug");
+        assert_eq!(first(&merged).summary, "Fix deployment bug");
     }
 
     #[test]
@@ -1214,7 +1232,7 @@ mod tests {
             None,
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged[0].summary, "fallback summary");
+        assert_eq!(first(&merged).summary, "fallback summary");
     }
 
     #[test]
@@ -1229,7 +1247,10 @@ mod tests {
             None,
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged[0].branch.as_deref(), Some("feature/auth-refactor"));
+        assert_eq!(
+            first(&merged).branch.as_deref(),
+            Some("feature/auth-refactor")
+        );
     }
 
     #[test]
@@ -1244,7 +1265,7 @@ mod tests {
             None,
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged[0].repo_name.as_deref(), Some("myrepo"));
+        assert_eq!(first(&merged).repo_name.as_deref(), Some("myrepo"));
     }
 
     #[test]
@@ -1260,7 +1281,7 @@ mod tests {
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
         // On Unix, Path::file_name("/x/y/") returns Some("y")
-        assert_eq!(merged[0].repo_name.as_deref(), Some("repo"));
+        assert_eq!(first(&merged).repo_name.as_deref(), Some("repo"));
     }
 
     #[test]
@@ -1275,7 +1296,7 @@ mod tests {
             None,
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert!(merged[0].repo_name.is_none());
+        assert!(first(&merged).repo_name.is_none());
     }
 
     #[test]
@@ -1290,7 +1311,10 @@ mod tests {
             Some("nuke-v-tables"),
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged[0].worktree_label.as_deref(), Some("nuke-v-tables"));
+        assert_eq!(
+            first(&merged).worktree_label.as_deref(),
+            Some("nuke-v-tables")
+        );
     }
 
     #[test]
@@ -1305,24 +1329,27 @@ mod tests {
             Some("retry-feature"),
         )];
         let merged = merge(Vec::new(), local, None, &[], 20);
-        assert_eq!(merged[0].summary, "Implement retry logic");
-        assert_eq!(merged[0].branch.as_deref(), Some("feature/retry"));
-        assert_eq!(merged[0].repo_name.as_deref(), Some("xai"));
-        assert_eq!(merged[0].worktree_label.as_deref(), Some("retry-feature"));
+        assert_eq!(first(&merged).summary, "Implement retry logic");
+        assert_eq!(first(&merged).branch.as_deref(), Some("feature/retry"));
+        assert_eq!(first(&merged).repo_name.as_deref(), Some("xai"));
+        assert_eq!(
+            first(&merged).worktree_label.as_deref(),
+            Some("retry-feature")
+        );
     }
 
     #[test]
     fn remote_session_has_none_metadata_fields() {
         let remote = vec![make_remote("s1", "remote title", "2026-03-01T00:00:00Z")];
         let merged = merge(remote, Vec::new(), None, &[], 20);
-        assert!(merged[0].branch.is_none());
-        assert!(merged[0].repo_name.is_none());
-        assert!(merged[0].worktree_label.is_none());
+        assert!(first(&merged).branch.is_none());
+        assert!(first(&merged).repo_name.is_none());
+        assert!(first(&merged).worktree_label.is_none());
         // Remote-only rows carry no local git enrichment.
-        assert!(merged[0].git_root_dir.is_none());
-        assert!(merged[0].git_remotes.is_empty());
-        assert!(merged[0].source_workspace_dir.is_none());
-        assert!(merged[0].session_kind.is_none());
+        assert!(first(&merged).git_root_dir.is_none());
+        assert!(first(&merged).git_remotes.is_empty());
+        assert!(first(&merged).source_workspace_dir.is_none());
+        assert!(first(&merged).session_kind.is_none());
     }
 
     #[test]
@@ -1350,8 +1377,8 @@ mod tests {
         // Query filters on display_title (which prefers generated_title), session_summary, and session_id
         let merged = merge(Vec::new(), local, Some("hi"), &[], 20);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].session_id, "s1");
-        assert_eq!(merged[0].summary, "Kubernetes deployment fix");
+        assert_eq!(first(&merged).session_id, "s1");
+        assert_eq!(first(&merged).summary, "Kubernetes deployment fix");
     }
 
     #[test]
@@ -1368,7 +1395,7 @@ mod tests {
         // "kubernetes" appears in generated_title, so the query matches via display_title()
         let merged = merge(Vec::new(), local, Some("kubernetes"), &[], 20);
         assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].summary, "Kubernetes deployment fix");
+        assert_eq!(first(&merged).summary, "Kubernetes deployment fix");
     }
 
     // ── empty / prune session tests ─────────────────────────────────────

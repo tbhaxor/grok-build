@@ -1,6 +1,5 @@
 use std::path::Path;
 use std::process::Command;
-
 fn git_stdout(args: &[&str]) -> Option<String> {
     Command::new("git")
         .args(args)
@@ -10,12 +9,8 @@ fn git_stdout(args: &[&str]) -> Option<String> {
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
 }
-
 fn main() {
     println!("cargo:rerun-if-env-changed=GROK_VERSION");
-
-    // Watch the git files that change on commit/checkout so the version stamp refreshes
-    // Never emit a missing path: cargo treats it as always dirty and rebuilds this crate every build
     let mut watch_paths = Vec::new();
     watch_paths.extend(git_stdout(&["rev-parse", "--git-path", "HEAD"]));
     watch_paths.extend(git_stdout(&["rev-parse", "--git-path", "logs/HEAD"]));
@@ -25,11 +20,8 @@ fn main() {
     for path in watch_paths.iter().filter(|p| Path::new(p).exists()) {
         println!("cargo:rerun-if-changed={path}");
     }
-
     // Upstream stamp is `"<version> (<12-char-sha>)"`. This fork keeps that
     // (and any existing `+build` metadata) and appends `tbhaxor-<short-sha>`.
-    // `1.0.16`            → `1.0.16+tbhaxor-abc1234 (deadbeef0123)`
-    // `1.0.16+ci.1`       → `1.0.16+ci.1.tbhaxor-abc1234 (deadbeef0123)`
     let version = std::env::var("GROK_VERSION")
         .or_else(|_| std::env::var("CARGO_PKG_VERSION"))
         .unwrap_or_else(|_| "0.0.0".to_string());
@@ -45,6 +37,12 @@ fn main() {
 
     let stamped = append_fork_build_meta(&version, "tbhaxor", &short_sha);
     println!("cargo:rustc-env=VERSION_WITH_COMMIT={stamped} ({commit})");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        println!("cargo:rustc-link-arg=/DELAYLOAD:ProjectedFSLib.dll");
+        println!("cargo:rustc-link-arg=delayimp.lib");
+    }
 }
 
 /// Append `fork_id-short_sha` as one SemVer build identifier (hyphen, not
