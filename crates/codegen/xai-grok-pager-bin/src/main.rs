@@ -2010,6 +2010,17 @@ fn crash_dir_for(args: &PagerArgs) -> std::path::PathBuf {
     );
     if is_leader { base.join("leader") } else { base }
 }
+/// `--cwd` is resolved against the launch directory when it is relative, matching `set_current_dir`.
+fn directory_requested_by_cwd_flag(
+    launch: &std::path::Path,
+    requested: &std::path::Path,
+) -> std::path::PathBuf {
+    if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        launch.join(requested)
+    }
+}
 fn dispatch_version_if_requested(args: &PagerArgs) -> bool {
     if !args.version {
         return false;
@@ -2051,6 +2062,23 @@ fn main() {
         xai_grok_update::channel_name().unwrap_or_default(),
     ));
     let args = PagerArgs::parse_cli();
+    // `--cwd` is the directory the pager will enter. The launch directory was already checked.
+    if let Some(requested) = args.cwd.as_deref() {
+        let launch = match std::env::current_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                eprintln!(
+                    "grok: cannot apply deny_directories because the current directory is unavailable: {error}"
+                );
+                std::process::exit(1);
+            }
+        };
+        let target = directory_requested_by_cwd_flag(&launch, requested);
+        if let Err(error) = xai_grok_config::enforce_startup_deny_directories_for(&target) {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
     if dispatch_version_if_requested(&args) || dispatch_doctor_if_requested(&args) {
         return;
     }
@@ -2815,6 +2843,18 @@ async fn signal_leaders_to_relaunch(installed_version: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cwd_flag_keeps_an_absolute_path_and_joins_a_relative_one() {
+        let launch = std::path::Path::new("/launch");
+        assert_eq!(
+            directory_requested_by_cwd_flag(launch, std::path::Path::new("/home/ada/secrets")),
+            std::path::PathBuf::from("/home/ada/secrets")
+        );
+        assert_eq!(
+            directory_requested_by_cwd_flag(launch, std::path::Path::new("secrets")),
+            std::path::PathBuf::from("/launch/secrets")
+        );
+    }
     #[test]
     fn embedded_agent_commands_heal_managed_policy_before_sandboxing() {
         for args in [
