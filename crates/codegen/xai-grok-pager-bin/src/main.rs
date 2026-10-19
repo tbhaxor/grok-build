@@ -2042,6 +2042,11 @@ fn main() {
     if let Some(code) = xai_grok_pager::voice::maybe_run_capture_subprocess() {
         std::process::exit(code);
     }
+    // User `deny_directories` refuses this working directory before CLI parsing, so the pager never starts.
+    if let Err(error) = xai_grok_config::enforce_startup_deny_directories() {
+        eprintln!("{error}");
+        std::process::exit(1);
+    }
     set_release_channel(ReleaseChannel::from_label(
         xai_grok_update::channel_name().unwrap_or_default(),
     ));
