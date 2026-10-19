@@ -11,6 +11,9 @@
 //!
 //! Each layer applies its own [`[[version_overrides]]`](version_overrides) before merge.
 //! Requirements layers (#4 through #6) may opt into fail-closed startup; see [`validate_requirements`].
+//! The user `config.toml` key `deny_directories` is applied even earlier: the process refuses
+//! to start when its working directory is one of those paths or is inside one. See
+//! [`enforce_startup_deny_directories`].
 
 #![deny(clippy::indexing_slicing)]
 
@@ -21,6 +24,7 @@ pub mod compat;
 mod config_layers;
 pub mod config_override;
 mod config_requirements;
+mod deny_directories;
 pub mod deserialize;
 mod display_refresh;
 mod distribution;
@@ -67,6 +71,7 @@ pub use config_layers::{
     CampaignsState, ConfigLayers, campaigns_application_disabled, campaigns_state_path,
     load_dismissed_ids, load_dismissed_ids_from_home, load_effective_config_disk_only,
 };
+pub use deny_directories::{DenyDirectoriesError, enforce_startup_deny_directories};
 pub use display_refresh::DisplayRefreshSettings;
 pub use distribution::{Capability, Distribution};
 pub use endpoints::{CLI_CHAT_PROXY_BASE_URL_DEFAULT, EndpointsConfig};
