@@ -17,11 +17,11 @@ headlessly for scripting/CI, or embedded in editors via the Agent Client
 Protocol (ACP).
 
 [Installing the released binary](#installing-the-released-binary) ·
+[This fork](#this-fork) ·
 [Building from source](#building-from-source) ·
 [Documentation](#documentation) ·
 [Repository layout](#repository-layout) ·
 [Development](#development) ·
-[Contributing](#contributing) ·
 [License](#license)
 
 ![Grok Build TUI](https://media.x.ai/v1/website/universe-tui-screenshot-6f7a0837.png)
@@ -50,6 +50,63 @@ grok --version
 
 See the [changelog](https://x.ai/build/changelog) for the latest fixes,
 features, and improvements in each release.
+
+## This fork
+
+This tree tracks [xai-org/grok-build](https://github.com/xai-org/grok-build)
+and keeps the behaviors below. Linux release binaries are attached to tags
+named `v<version>+tbhaxor-<short-sha>` on
+[this repository's releases](https://github.com/tbhaxor/grok-build/releases).
+`grok --version` prints the upstream version with `+tbhaxor-<short-sha>`
+appended.
+
+```sh
+curl -L -o grok 'https://github.com/tbhaxor/grok-build/releases/download/v1.0.45%2Btbhaxor-ac720b6/grok-x86_64-unknown-linux-gnu'
+chmod +x grok
+./grok --version
+```
+
+The scheduled nightly upstream sync is off. Pushing a `v*` tag builds
+`grok-x86_64-unknown-linux-gnu` and uploads it to that release.
+
+### Directory deny list
+
+`[cli] deny_directories` in `$GROK_HOME/config.toml` (or `~/.grok/config.toml`
+when `GROK_HOME` is unset) refuses to start when the launch directory or
+`--cwd` matches an entry. The process exits 1 before the pager and names the
+config file. `$VAR` and `${VAR}` expand when the process starts. A variable
+that is not set expands to an empty string. Each entry must be an absolute
+path after that expansion.
+
+```toml
+[cli]
+deny_directories = [
+  "$HOME/secret-project",
+  "$HOME/secret-project/*",
+  "$HOME/secret-project/**",
+]
+```
+
+- A plain path matches only that directory. `$HOME/secret-project/area51` still starts.
+- `path/*` matches the directories one level inside `path`. `$HOME/secret-project/area51` exits 1, and `$HOME/secret-project/area51/subdir` still starts.
+- `path/**` matches every nested directory at any depth. `$HOME/secret-project` itself still starts.
+
+A relative `--cwd` is resolved from the directory where you ran `grok`.
+
+### Sessions
+
+The session list includes zero-turn sessions. `grok sessions prune` deletes
+those empty sessions locally and remotely. `--all` selects every session,
+`--dry-run` prints the match set, and the command asks for confirmation unless
+`--force` is set. The command is `grok sessions`.
+
+### Turn navigation
+
+`/jump` opens a turn picker. `/jump N` moves to the turn index shown as
+`Turn:` in `/session-info` and on a hovered user-prompt timestamp
+(`HH:mm:ss | MMM DD | N`). An unknown number leaves the viewport where it is
+and reports that the turn does not exist. A jump that lands flashes the
+prompt.
 
 ## Building from source
 
@@ -118,11 +175,6 @@ cargo test -p xai-grok-config # per-crate tests
 cargo clippy -p <crate>       # lint config: clippy.toml at the repo root
 cargo fmt --all               # rustfmt.toml at the repo root
 ```
-
-## Contributing
-
-> [!NOTE]
-> External contributions are not accepted. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## License
 
