@@ -11,8 +11,8 @@
 //!
 //! Each layer applies its own [`[[version_overrides]]`](version_overrides) before merge.
 //! Requirements layers (#4 through #6) may opt into fail-closed startup; see [`validate_requirements`].
-//! The user `config.toml` key `deny_directories` is applied even earlier: the process refuses
-//! to start when its working directory is one of those paths or is inside one. See
+//! `[cli] deny_directories` is applied even earlier. A plain path matches only that directory,
+//! `/*` matches one level of children, and `/**` matches every directory inside it. See
 //! [`enforce_startup_deny_directories`].
 
 #![deny(clippy::indexing_slicing)]

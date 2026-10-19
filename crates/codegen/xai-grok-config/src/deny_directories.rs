@@ -1,19 +1,26 @@
-//! Startup deny list from `deny_directories` in the user `config.toml`.
+//! Startup deny list from `[cli] deny_directories` in the user `config.toml`.
 //!
 //! ```toml
-//! deny_directories = ["$HOME/secrets", "/opt/${USER}/private"]
+//! [cli]
+//! deny_directories = [
+//!   "$HOME/secret-project",
+//!   "$HOME/secret-project/*",
+//!   "$HOME/secret-project/**",
+//! ]
 //! ```
 //!
 //! `$VAR` and `${VAR}` expand when the process starts. A variable that is not set expands to an
-//! empty string. `$$` is a literal `$`. After expansion each path must be absolute. The working
-//! directory where `grok` was launched is refused when it is one of those paths or a directory
-//! inside it. The check runs before argument parsing, so the pager never starts.
+//! empty string. `$$` is a literal `$`. After expansion each entry must be an absolute path.
+//! A plain path matches only that directory. `*` matches one path component, so `path/*` matches
+//! only the directories directly inside `path`. `**` matches one or more components, so `path/**`
+//! matches every directory inside `path` at any depth and does not match `path` itself.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Component, Path, PathBuf};
 
 use crate::loader::{USER_CONFIG_FILENAME, toml_error_detail};
 
-/// Top-level `config.toml` key. Paths are absolute after `$VAR` / `${VAR}` expansion.
+/// `[cli]` key. Paths are absolute after `$VAR` / `${VAR}` expansion.
 pub const DENY_DIRECTORIES_KEY: &str = "deny_directories";
 
 /// Why startup was refused while applying [`DENY_DIRECTORIES_KEY`].
@@ -29,12 +36,12 @@ pub enum DenyDirectoriesError {
     /// The user config is not valid TOML, so the deny list could not be applied.
     #[error("grok: cannot apply deny_directories from {path}: {detail}")]
     Parse { path: PathBuf, detail: String },
-    /// `deny_directories` is present but is not an array of strings.
+    /// `[cli] deny_directories` is present but is not an array of strings.
     #[error("grok: cannot apply deny_directories from {path}: {detail}")]
     Shape { path: PathBuf, detail: String },
     /// An entry is not absolute after environment expansion.
     #[error(
-        "grok: deny_directories entry in {path} must be an absolute path\n  \
+        "grok: [cli] deny_directories entry in {path} must be an absolute path\n  \
          entry: {entry:?}\n  \
          expanded: {expanded:?}\n  \
          Missing environment variables expand to an empty string."
@@ -44,10 +51,10 @@ pub enum DenyDirectoriesError {
         entry: String,
         expanded: String,
     },
-    /// The process working directory is a denied path, or is inside one.
+    /// The checked directory matched one `[cli] deny_directories` pattern.
     #[error(
         "grok: refusing to start in {cwd}\n  \
-         The current directory is denied in {config_path} under deny_directories\n  \
+         The current directory is denied in {config_path} under [cli] deny_directories\n  \
          entry: {entry:?}\n  \
          expanded: {expanded:?}\n  \
          path: {denied}"
@@ -69,7 +76,7 @@ pub enum DenyDirectoriesError {
     },
 }
 
-/// Refuse startup when `directory` is covered by `deny_directories` in the user `config.toml`
+/// Refuse startup when `directory` matches `[cli] deny_directories` in the user `config.toml`
 /// (`$GROK_HOME/config.toml`, or `<home>/.grok/config.toml`).
 ///
 /// The pager calls this for the launch directory and again for `--cwd`, so a denied directory
@@ -128,33 +135,33 @@ fn evaluate_deny_directories(
     for entry in entries {
         let trimmed = entry.trim();
         let expanded = expand_deny_path(trimmed, &mut lookup);
-        let expanded_path = Path::new(&expanded);
-        if trimmed.is_empty() || !expanded_path.is_absolute() {
+        let pattern = split_pattern(Path::new(&expanded));
+        if trimmed.is_empty() || pattern.invalid || !pattern.base.is_absolute() {
             return Err(DenyDirectoriesError::NotAbsolute {
                 path: config_path.to_path_buf(),
                 entry: trimmed.to_string(),
                 expanded,
             });
         }
-        let denied = resolve_for_compare(expanded_path);
-        if !denied.is_absolute() {
+        let base = resolve_for_compare(&pattern.base);
+        if !base.is_absolute() {
             return Err(DenyDirectoriesError::NotAbsolute {
                 path: config_path.to_path_buf(),
                 entry: trimmed.to_string(),
                 expanded,
             });
         }
-        prepared.push((trimmed.to_string(), expanded, denied));
+        prepared.push((trimmed.to_string(), expanded, base, pattern.globs));
     }
     let cwd_resolved = resolve_for_compare(cwd);
-    for (entry, expanded, denied) in prepared {
-        if cwd_resolved.starts_with(&denied) {
+    for (entry, expanded, base, globs) in prepared {
+        if pattern_covers(&base, &globs, &cwd_resolved) {
             return Err(DenyDirectoriesError::Denied {
                 cwd: cwd.to_path_buf(),
                 config_path: config_path.to_path_buf(),
                 entry,
                 expanded,
-                denied,
+                denied: base,
             });
         }
     }
@@ -191,19 +198,31 @@ fn entries_from_value(
         return Err(DenyDirectoriesError::Shape {
             path: config_path.to_path_buf(),
             detail: format!(
-                "`{DENY_DIRECTORIES_KEY}` must be an array of strings at the top level, found {}",
+                "`[cli]` must be a table to read `{DENY_DIRECTORIES_KEY}`, found {}",
                 value_kind(value)
             ),
         });
     };
-    let Some(raw) = table.get(DENY_DIRECTORIES_KEY) else {
+    let Some(cli_value) = table.get("cli") else {
+        return Ok(Vec::new());
+    };
+    let Some(cli) = cli_value.as_table() else {
+        return Err(DenyDirectoriesError::Shape {
+            path: config_path.to_path_buf(),
+            detail: format!(
+                "`[cli]` must be a table to read `{DENY_DIRECTORIES_KEY}`, found {}",
+                value_kind(cli_value)
+            ),
+        });
+    };
+    let Some(raw) = cli.get(DENY_DIRECTORIES_KEY) else {
         return Ok(Vec::new());
     };
     let Some(items) = raw.as_array() else {
         return Err(DenyDirectoriesError::Shape {
             path: config_path.to_path_buf(),
             detail: format!(
-                "`{DENY_DIRECTORIES_KEY}` must be an array of strings, found {}",
+                "`[cli] {DENY_DIRECTORIES_KEY}` must be an array of strings, found {}",
                 value_kind(raw)
             ),
         });
@@ -215,7 +234,7 @@ fn entries_from_value(
             return Err(DenyDirectoriesError::Shape {
                 path: config_path.to_path_buf(),
                 detail: format!(
-                    "`{DENY_DIRECTORIES_KEY}` entry {position} must be a string, found {}",
+                    "`[cli] {DENY_DIRECTORIES_KEY}` entry {position} must be a string, found {}",
                     value_kind(item)
                 ),
             });
@@ -235,6 +254,96 @@ fn value_kind(value: &toml::Value) -> &'static str {
         toml::Value::Array(_) => "an array",
         toml::Value::Table(_) => "a table",
     }
+}
+
+struct CompiledPattern {
+    base: PathBuf,
+    globs: Vec<OsString>,
+    invalid: bool,
+}
+
+fn is_glob_component(name: &OsStr) -> bool {
+    name == OsStr::new("*") || name == OsStr::new("**")
+}
+
+/// Split an expanded entry into the literal directory and glob components.
+/// `*` and `**` are whole path components. Anything after the first glob is a glob token.
+fn split_pattern(expanded: &Path) -> CompiledPattern {
+    let mut base = PathBuf::new();
+    let mut globs = Vec::new();
+    let mut seen_glob = false;
+    let mut invalid = false;
+    for component in expanded.components() {
+        if seen_glob {
+            match component {
+                Component::Normal(name) => globs.push(name.to_os_string()),
+                _ => invalid = true,
+            }
+            continue;
+        }
+        match component {
+            Component::Normal(name) if is_glob_component(name) => {
+                seen_glob = true;
+                globs.push(name.to_os_string());
+            }
+            other => base.push(other.as_os_str()),
+        }
+    }
+    CompiledPattern {
+        base,
+        globs,
+        invalid,
+    }
+}
+
+/// `**` consumes one or more components. `*` consumes exactly one. Other tokens are literals.
+fn components_match(pattern: &[OsString], path: &[OsString]) -> bool {
+    let Some((head, pattern_rest)) = pattern.split_first() else {
+        return path.is_empty();
+    };
+    if head.as_os_str() == OsStr::new("**") {
+        let mut consumed = 1usize;
+        while consumed <= path.len() {
+            if let Some(suffix) = path.get(consumed..)
+                && components_match(pattern_rest, suffix)
+            {
+                return true;
+            }
+            consumed = consumed.saturating_add(1);
+        }
+        false
+    } else if head.as_os_str() == OsStr::new("*") {
+        let Some((_, path_rest)) = path.split_first() else {
+            return false;
+        };
+        components_match(pattern_rest, path_rest)
+    } else {
+        let Some((segment, path_rest)) = path.split_first() else {
+            return false;
+        };
+        segment == head && components_match(pattern_rest, path_rest)
+    }
+}
+
+fn pattern_covers(base: &Path, globs: &[OsString], cwd_resolved: &Path) -> bool {
+    if globs.is_empty() {
+        return cwd_resolved == base;
+    }
+    let Ok(rest) = cwd_resolved.strip_prefix(base) else {
+        return false;
+    };
+    if rest.as_os_str().is_empty() {
+        return false;
+    }
+    let mut parts = Vec::new();
+    for component in rest.components() {
+        match component {
+            Component::Normal(name) => parts.push(name.to_os_string()),
+            Component::CurDir => {}
+            _ => return false,
+        }
+    }
+    components_match(globs, &parts)
 }
 
 /// Resolve `.` and `..` without touching the filesystem.
@@ -310,8 +419,10 @@ mod tests {
                 .map(toml::Value::String)
                 .collect(),
         );
+        let mut cli = toml::map::Map::new();
+        cli.insert(DENY_DIRECTORIES_KEY.to_string(), value);
         let mut table = toml::map::Map::new();
-        table.insert(DENY_DIRECTORIES_KEY.to_string(), value);
+        table.insert("cli".to_string(), toml::Value::Table(cli));
         toml::to_string(&toml::Value::Table(table)).unwrap()
     }
 
@@ -391,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_directory_and_its_descendants_are_denied() {
+    fn plain_path_matches_only_that_directory() {
         let dir = tempfile::tempdir().unwrap();
         let denied = dir.path().join("denied");
         let nested = denied.join("nested");
@@ -403,18 +514,64 @@ mod tests {
         let exact = eval(&config_path, &denied, &[]).unwrap_err();
         let message = exact.to_string();
         assert!(message.contains("denied"), "{message}");
-        assert!(message.contains("deny_directories"), "{message}");
+        assert!(message.contains("[cli] deny_directories"), "{message}");
         assert!(
             message.contains(&config_path.display().to_string()),
             "{message}"
         );
         assert_eq!(denied_path(exact), resolve_for_compare(&denied));
 
-        let child = eval(&config_path, &nested, &[]).unwrap_err();
-        assert_eq!(denied_path(child), resolve_for_compare(&denied));
-
+        eval(&config_path, &nested, &[]).unwrap();
         eval(&config_path, &sibling, &[]).unwrap();
         eval(&config_path, dir.path(), &[]).unwrap();
+    }
+
+    #[test]
+    fn star_matches_one_level_and_globstar_matches_every_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("secret-project");
+        let area = base.join("area51");
+        let sub = area.join("subdir");
+        std::fs::create_dir_all(&sub).unwrap();
+        let base_text = base.display().to_string();
+
+        let one_level = write_config(dir.path(), &deny_config(&[&format!("{base_text}/*")]));
+        eval(&one_level, &base, &[]).unwrap();
+        let child = eval(&one_level, &area, &[]).unwrap_err();
+        assert_eq!(denied_path(child), resolve_for_compare(&base));
+        eval(&one_level, &sub, &[]).unwrap();
+
+        let every_level = write_config(dir.path(), &deny_config(&[&format!("{base_text}/**")]));
+        eval(&every_level, &base, &[]).unwrap();
+        assert!(eval(&every_level, &area, &[]).is_err());
+        assert!(eval(&every_level, &sub, &[]).is_err());
+    }
+
+    #[test]
+    fn home_star_pattern_expands_before_matching() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let area = home.join("secret-project").join("area51");
+        let sub = area.join("subdir");
+        std::fs::create_dir_all(&sub).unwrap();
+        let config_path = write_config(dir.path(), &deny_config(&["$HOME/secret-project/*"]));
+        let home_text = home.display().to_string();
+        let vars = [("HOME", home_text.as_str())];
+        eval(&config_path, &home.join("secret-project"), &vars).unwrap();
+        assert!(eval(&config_path, &area, &vars).is_err());
+        eval(&config_path, &sub, &vars).unwrap();
+    }
+
+    #[test]
+    fn top_level_deny_directories_is_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let denied = dir.path().join("denied");
+        std::fs::create_dir(&denied).unwrap();
+        let config_path = write_config(
+            dir.path(),
+            &format!("deny_directories = [\"{}\"]\n", denied.display()),
+        );
+        eval(&config_path, &denied, &[]).unwrap();
     }
 
     #[test]
@@ -513,7 +670,7 @@ mod tests {
     fn wrong_shape_names_the_config_file() {
         let dir = tempfile::tempdir().unwrap();
         let cwd = dir.path();
-        let as_string = write_config(dir.path(), "deny_directories = \"/tmp\"\n");
+        let as_string = write_config(dir.path(), "[cli]\ndeny_directories = \"/tmp\"\n");
         match eval(&as_string, cwd, &[]) {
             Err(DenyDirectoriesError::Shape { path, detail }) => {
                 assert_eq!(path, as_string);
@@ -522,7 +679,7 @@ mod tests {
             }
             other => panic!("expected a shape error, got {other:?}"),
         }
-        let as_int = write_config(dir.path(), "deny_directories = [1]\n");
+        let as_int = write_config(dir.path(), "[cli]\ndeny_directories = [1]\n");
         match eval(&as_int, cwd, &[]) {
             Err(DenyDirectoriesError::Shape { detail, .. }) => {
                 assert!(detail.contains("entry 1"), "{detail}");
@@ -565,8 +722,26 @@ mod tests {
         symlink(&real, &link).unwrap();
 
         let through_link = write_config(dir.path(), &deny_config(&[&link.display().to_string()]));
-        let error = eval(&through_link, &nested, &[]).unwrap_err();
+        let error = eval(&through_link, &real, &[]).unwrap_err();
         assert_eq!(denied_path(error), resolve_for_compare(&real));
+        eval(&through_link, &nested, &[]).unwrap();
+
+        let one_level = write_config(
+            dir.path(),
+            &deny_config(&[&format!("{}/*", link.display())]),
+        );
+        assert!(eval(&one_level, &nested, &[]).is_err());
+        let deeper = nested.join("subdir");
+        std::fs::create_dir(&deeper).unwrap();
+        eval(&one_level, &deeper, &[]).unwrap();
+
+        let every_level = write_config(
+            dir.path(),
+            &deny_config(&[&format!("{}/**", link.display())]),
+        );
+        assert!(eval(&every_level, &nested, &[]).is_err());
+        assert!(eval(&every_level, &deeper, &[]).is_err());
+        eval(&every_level, &real, &[]).unwrap();
 
         let other = dir.path().join("other");
         std::fs::create_dir(&other).unwrap();
