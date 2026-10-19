@@ -71,7 +71,9 @@ pub use config_layers::{
     CampaignsState, ConfigLayers, campaigns_application_disabled, campaigns_state_path,
     load_dismissed_ids, load_dismissed_ids_from_home, load_effective_config_disk_only,
 };
-pub use deny_directories::{DenyDirectoriesError, enforce_startup_deny_directories};
+pub use deny_directories::{
+    DenyDirectoriesError, enforce_startup_deny_directories, enforce_startup_deny_directories_for,
+};
 pub use display_refresh::DisplayRefreshSettings;
 pub use distribution::{Capability, Distribution};
 pub use endpoints::{CLI_CHAT_PROXY_BASE_URL_DEFAULT, EndpointsConfig};

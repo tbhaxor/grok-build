@@ -69,25 +69,38 @@ pub enum DenyDirectoriesError {
     },
 }
 
-/// Refuse startup when the process working directory is covered by `deny_directories`
-/// in the user `config.toml` (`$GROK_HOME/config.toml`, or `<home>/.grok/config.toml`).
+/// Refuse startup when `directory` is covered by `deny_directories` in the user `config.toml`
+/// (`$GROK_HOME/config.toml`, or `<home>/.grok/config.toml`).
+///
+/// The pager calls this for the launch directory and again for `--cwd`, so a denied directory
+/// cannot be selected from somewhere else.
 ///
 /// Missing config, or a config with no `deny_directories` key, allows startup.
 /// An unreadable or unparseable config refuses startup: the deny list cannot be skipped
 /// because the file could not be read. A list entry that is not absolute after expansion
-/// also refuses startup, including when the working directory is outside the other entries.
+/// also refuses startup, including when `directory` is outside the other entries.
 ///
 /// # Errors
 ///
-/// [`DenyDirectoriesError`] when the config cannot be applied or the working directory is denied.
-pub fn enforce_startup_deny_directories() -> Result<(), DenyDirectoriesError> {
+/// [`DenyDirectoriesError`] when the config cannot be applied or `directory` is denied.
+pub fn enforce_startup_deny_directories_for(directory: &Path) -> Result<(), DenyDirectoriesError> {
     let Some(home) = xai_dirs::resolve_grok_home() else {
         return Ok(());
     };
     let config_path = home.join(USER_CONFIG_FILENAME);
+    evaluate_deny_directories(&config_path, directory, process_env_lookup)
+}
+
+/// Refuse startup when the process working directory is covered by `deny_directories`.
+///
+/// # Errors
+///
+/// [`DenyDirectoriesError`] when the config cannot be applied, the working directory cannot be
+/// read, or that directory is denied.
+pub fn enforce_startup_deny_directories() -> Result<(), DenyDirectoriesError> {
     let cwd =
         std::env::current_dir().map_err(|source| DenyDirectoriesError::CurrentDir { source })?;
-    evaluate_deny_directories(&config_path, &cwd, process_env_lookup)
+    enforce_startup_deny_directories_for(&cwd)
 }
 
 fn process_env_lookup(name: &str) -> Option<String> {
